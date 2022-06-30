@@ -225,63 +225,57 @@ fn main() {
     list_objects();
 //    return;
 
-    let par = WalkBuilder::new("/home/david/local/cad")
-        .hidden(false)
-        .build_parallel();
+    // let par = WalkBuilder::new("/home/david/local/cad")
+    //     .hidden(false)
+    //     .build_parallel();
 
     let (tx, rx) = channel();
 
-    for entry in WalkDir::new("foo") {
-    thread::spawn(move|| {    
-        par.run(|| {
+    thread::spawn(move|| {
+        for entry in WalkDir::new("/home/david/local/cad") {
             let con = create_database().unwrap();
             let tx = tx.clone();
-            
-            Box::new(move |result| {
 
-                let os = openstack::Cloud::from_env()
-                    .expect("Failed to create an identity provider from the environment");
-                let bucket = swift::Bucket::new(&os, "bucket");
-                let dir_entry = result.unwrap();
-                let metadata = dir_entry.metadata().unwrap();
+            let os = openstack::Cloud::from_env()
+                .expect("Failed to create an identity provider from the environment");
+            let bucket = swift::Bucket::new(&os, "bucket");
+            let dir_entry = entry.unwrap();
+            let metadata = dir_entry.metadata().unwrap();
 
-                let mut destination: Option<String> = None;
-                let mut data_hash: Option<String> = None;
+            let mut destination: Option<String> = None;
+            let mut data_hash: Option<String> = None;
 
-                let file_type = dir_entry.file_type().and_then(filetype_from);
+            let file_type = filetype_from(dir_entry.file_type());
 
-                let path = dir_entry.path().to_string_lossy();
+            let path = dir_entry.path().to_string_lossy();
 
-                match file_type {
-                    Some(FileType::FILE) => {
-                        let metadata_hash = generate_metadata_hash(metadata.len(), metadata.mtime(), dir_entry.path());
-                        data_hash = process_file(&con, bucket, &path, &metadata_hash);    
-                    }
-                    Some(FileType::SYMLINK) => {
-                        destination = Some(std::fs::read_link(dir_entry.path()).unwrap().to_string_lossy().to_string());
-                    }
-                    _ => {
-                    }
+            match file_type {
+                Some(FileType::FILE) => {
+                    let metadata_hash = generate_metadata_hash(metadata.len(), metadata.mtime(), dir_entry.path());
+                    data_hash = process_file(&con, bucket, &path, &metadata_hash);    
                 }
-
-                match file_type {
-                    Some(t) => {
-                        tx.send(FileMetadata {
-                            name: path.to_string(),
-                            mtime: metadata.mtime(),
-                            mode: metadata.mode(),
-                            xattr: HashMap::new(),
-                            ttype: t,
-                            destination,
-                            data_hash,
-                        }).unwrap();
-                    }
-                    _ => {}
+                Some(FileType::SYMLINK) => {
+                    destination = Some(std::fs::read_link(dir_entry.path()).unwrap().to_string_lossy().to_string());
                 }
+                _ => {
+                }
+            }
 
-                WalkState::Continue
-            })
-        });
+            match file_type {
+                Some(t) => {
+                    tx.send(FileMetadata {
+                        name: path.to_string(),
+                        mtime: metadata.mtime(),
+                        mode: metadata.mode(),
+                        xattr: HashMap::new(),
+                        ttype: t,
+                        destination,
+                        data_hash,
+                    }).unwrap();
+                }
+                _ => {}
+            }
+        }
     });
 
     write_metadata_file(rx);
