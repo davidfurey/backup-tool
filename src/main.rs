@@ -1,7 +1,9 @@
 pub mod encryption;
 pub mod decryption;
+pub mod sharding;
 pub mod swift;
 
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::thread;
 use std::os::unix::prelude::MetadataExt;
@@ -9,8 +11,9 @@ use std::io;
 use std::fs;
 use std::path::Path;
 use rusqlite::{Connection, Result, Error};
-use ignore::{WalkBuilder, WalkState};
 use sha2::{Sha256, Digest};
+use hmac::{Hmac, Mac};
+use sharding::ShardedChannel;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::mpsc::channel;
 use std::collections::HashMap;
@@ -26,11 +29,17 @@ use serde::{Serialize};
 use rmps::{Serializer};
 
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 enum FileType {
     FILE,
     SYMLINK,
     DIRECTORY,
+}
+
+#[derive(Debug)]
+struct UploadRequest {
+    filename: String,
+    data_hash: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -49,107 +58,85 @@ struct FileData {
     data: Vec<FileMetadata>,
 }
 
+struct DataStore {
+    id: i32,
+}
 
-fn create_database() -> Result<Connection, Error> {
+fn db_connect() -> Result<Connection, Error> {
     return Connection::open("cache.db");
 }
 
-fn init_database(connection: &Connection) {
+fn db_init(connection: &Connection) {
     connection.execute("CREATE TABLE IF NOT EXISTS fs_hash_cache (fs_hash CHARACTER(128) UNIQUE, data_hash CHARACTER(128) NULL, in_use BOOLEAN);", []).unwrap();
-    connection.execute("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT UNIQUE, encrypted_md5 TEXT);", []).unwrap();
+    connection.execute("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT UNIQUE, encrypted_md5 TEXT NULL, datastore_id INTEGER);", []).unwrap();
 }
 
 fn mark_used_and_lookup_hash(connection: &Connection, filename: &str) -> Result<Option<String>, rusqlite::Error> {
     let mut stmt = connection.prepare("INSERT INTO fs_hash_cache (fs_hash, in_use) VALUES(?, true) ON CONFLICT(fs_hash) do UPDATE set in_use = true RETURNING data_hash").unwrap();
     let mut rows = stmt.query([filename]).unwrap();
     let row = rows.next();
-    return match row {
-        Ok(Some(r)) => {
-            let hash: Result<Option<String>> = r.get(0);
-            //let foo = hash.map(|s| Some(s));
-            hash
-        },
+    match row {
+        Ok(Some(r)) => r.get(0),
         Ok(None) => Ok(None),
         Err(x) => Err(x),
-    };
+    }
 }
 
-fn is_data_in_cold_storage(connection: &Connection, data_hash: &String) -> Result<bool, rusqlite::Error> {
-    let mut stmt = connection.prepare("SELECT EXISTS(SELECT 1 FROM uploaded_objects WHERE data_hash = ?)").unwrap();
-    let mut rows = stmt.query([data_hash]).unwrap();
-    let row = rows.next();
-    return match row {
-        Ok(Some(r)) => {
-            let hash: Result<u32> = r.get(0);
-            hash.map(|x| x == 1)
-        },
-        Ok(None) => Ok(false),
-        Err(x) => Err(x),
-    };
+fn is_data_in_cold_storage(connection: &Connection, data_hash: &String, stores: &Vec<DataStore>) -> Result<bool, rusqlite::Error> {
+    let mut stmt = connection.prepare("SELECT 1 FROM uploaded_objects WHERE data_hash = ? and datastore_id = ?").unwrap();
+    for store in stores {
+        let mut rows = stmt.query([data_hash, store.id.to_string().as_str()]).unwrap();
+        match rows.next() {
+            Ok(None) => return Ok(false),
+            Ok(_) => { },
+            Err(x) => return Err(x)
+        };
+    }
+    return Ok(true);
 }
 
-fn set_data_in_cold_storage(connection: &Connection, hash: &String) -> Result<usize, rusqlite::Error> {
-    let mut stmt = connection.prepare("INSERT INTO uploaded_objects VALUES (?, '')").unwrap();
-    return stmt.execute([hash]);
+// fn set_data_in_cold_storage(connection: &Connection, hash: &str) -> Result<usize, rusqlite::Error> {
+//     let mut stmt = connection.prepare("INSERT OR IGNORE INTO uploaded_objects VALUES (?, NULL)").unwrap();
+//     return stmt.execute([hash]);
+// }
+
+fn set_data_in_cold_storage(connection: &Connection, hash: &str, md5_hash: &str, datastore_id: i32) -> Result<usize, rusqlite::Error> {
+    let mut stmt = connection.prepare("INSERT INTO uploaded_objects VALUES (?, ?, ?)").unwrap();
+    return stmt.execute([hash, md5_hash, datastore_id.to_string().as_str()]);
 }
 
 
+// fn update_hash_in_cold_storage(connection: &Connection, hash: &str, md5_hash: &str) -> Result<usize, rusqlite::Error> {
+//     let mut stmt = connection.prepare("UPDATE uploaded_objects set encrypted_md5 = ? where data_hash = ?").unwrap();
+//     return stmt.execute([hash, md5_hash]);
+// }
 
 fn set_data_hash(connection: &Connection, metadata_hash: &str, data_hash: &str) -> Result<usize, rusqlite::Error> {
     let mut stmt = connection.prepare("UPDATE fs_hash_cache set data_hash = ? where fs_hash = ?").unwrap();
     return stmt.execute([data_hash, metadata_hash]);
 }
 
-fn hash_file(filename: &str) -> String {
-    let mut hasher = Sha256::new();
-    let mut file = fs::File::open(filename).unwrap();
+// todo: HMAC secret key
+fn hash_file(path: &Path) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut hasher = HmacSha256::new_from_slice(b"my secret and secure key")
+        .expect("HMAC can take key of any size");
+    //let mut hasher = Sha256::new();
+    let mut file = fs::File::open(path).unwrap();
     io::copy(&mut file, &mut hasher).unwrap();
-    let digest = hasher.finalize();
+    let digest = hasher.finalize().into_bytes();
     return format!("{:X}", digest);
 }
 
-fn upload_file(filename: &str, hash: &str) -> Result<(), Error> {
-    print!("uploading {:?} to {:?}", filename, hash);
-    // todo: encryption
-    // upload
-    return Ok(())
-}
-
-// fn upload_file2(os: Cloud, container: &str, key: &str, source: File) {
-//     let os = openstack::Cloud::from_env()
-//         .expect("Failed to create an identity provider from the environment");
-
-//     //let container_name = "bucket";
-//     //let container = os.get_container(&container_name).expect("Cannot get a container");  
-
-//     os.create_object(container, key, source);
-// }
-
-fn process_file(connection: &Connection, bucket: swift::Bucket, filename: &str, metadata_hash: &str) -> Option<String> {
+fn process_file(connection: &Connection, path: &Path, metadata_hash: &str) -> Result<String, rusqlite::Error> {
     let res = mark_used_and_lookup_hash(&connection, metadata_hash);
-    match res {
-        Ok(Some(data_hash)) => {
-            return Some(data_hash);
-        }
-        Ok(None) => { // find hash 
-           let data_hash = hash_file(filename);
+    res.map(|v| {
+        v.unwrap_or_else(|| {
+            let data_hash = hash_file(path);
             set_data_hash(&connection, metadata_hash, &data_hash).unwrap();
-            if !is_data_in_cold_storage(&connection, &data_hash).unwrap() {
-                let file = fs::File::open(filename).unwrap();
-                let key = format!("data/{}", data_hash);
-                match bucket.upload(&key, file) {
-                    Ok(_) => {
-                        set_data_in_cold_storage(&connection, &data_hash).unwrap();
-                    },
-                    _ => {}
-                }
-            }
-            return Some(data_hash)
-        }
-        Err(_) => { // give up 
-            return None;
-        }
-    }
+            data_hash
+        })
+    })
 }
 
 fn generate_metadata_hash(len: u64, mtime: i64, path: &Path) -> String {
@@ -157,24 +144,25 @@ fn generate_metadata_hash(len: u64, mtime: i64, path: &Path) -> String {
     hasher.update(len.to_ne_bytes());
     hasher.update(mtime.to_ne_bytes());
     hasher.update(path.as_os_str().as_bytes());
-    return format!("{:X}", hasher.finalize());
+    format!("{:X}", hasher.finalize())
 }
 
 fn filetype_from(t: fs::FileType) -> Option<FileType> {
     if t.is_dir() {
-        return Some(FileType::DIRECTORY);
+        Some(FileType::DIRECTORY)
     } else if t.is_file() {
-        return Some(FileType::FILE);
+        Some(FileType::FILE)
     } else if t.is_symlink() {
-        return Some(FileType::SYMLINK)
+        Some(FileType::SYMLINK)
+    } else {
+        None
     }
-    return None;
 }
 
-fn write_metadata_file(rx: Receiver<FileMetadata>) {
+fn write_metadata_file(metadata_rx: Receiver<FileMetadata>) {
     let mut vec = Vec::new();
 
-    while let Ok(msg) = rx.recv() {
+    while let Ok(msg) = metadata_rx.recv() {
         vec.push(msg);
     }
 
@@ -188,71 +176,84 @@ fn write_metadata_file(rx: Receiver<FileMetadata>) {
 }
 
 
-fn list_objects() {
-    let os = openstack::Cloud::from_env()
-        .expect("Failed to create an identity provider from the environment");
+// fn list_objects() {
+//     let os = openstack::Cloud::from_env()
+//         .expect("Failed to create an identity provider from the environment");
 
-    let container_name = "bucket";
-    let container = os.get_container(&container_name).expect("Cannot get a container");
+//     let container_name = "bucket";
+//     let container = os.get_container(&container_name).expect("Cannot get a container");
 
-    println!("Found container with Name = {}, Number of object = {}",
-        container.name(),
-        container.object_count()
-    );
+//     println!("Found container with Name = {}, Number of object = {}",
+//         container.name(),
+//         container.object_count()
+//     );
 
-    let objects: Vec<openstack::object_storage::Object> = container
-        .find_objects()
-        .with_limit(10)
-        .all()
-        .expect("cannot list objects");
+//     let objects: Vec<openstack::object_storage::Object> = container
+//         .find_objects()
+//         .with_limit(10)
+//         .all()
+//         .expect("cannot list objects");
 
-    println!("first 10 objects");
-    for o in objects {
-        println!("Name = {}, Bytes = {}, Hash = {}",
-            o.name(),
-            o.bytes(),
-            o.hash().as_ref().unwrap_or(&String::from("")),
-        );
-    }
+//     println!("first 10 objects");
+//     for o in objects {
+//         println!("Name = {}, Bytes = {}, Hash = {}",
+//             o.name(),
+//             o.bytes(),
+//             o.hash().as_ref().unwrap_or(&String::from("")),
+//         );
+//     }
+// }
+
+fn create_hash_workers(
+    hash_rx: crossbeam_channel::Receiver<walkdir::DirEntry>,
+    metadata_tx: std::sync::mpsc::Sender<FileMetadata>,
+    upload_tx: ShardedChannel<UploadRequest>,
+    stores:  Arc<Vec<DataStore>>,
+) {
+    //let stores = Arc::new(stores);
+    for _n in 0..4 {
+        create_hash_worker(&hash_rx, &metadata_tx, &upload_tx, stores.clone());
+     } 
 }
 
-
-fn main() {
-    let connection = create_database().unwrap();
-
-    init_database(&connection);
-
-    list_objects();
-//    return;
-
-    // let par = WalkBuilder::new("/home/david/local/cad")
-    //     .hidden(false)
-    //     .build_parallel();
-
-    let (tx, rx) = channel();
+fn create_hash_worker(
+    hash_rx: &crossbeam_channel::Receiver<walkdir::DirEntry>,
+    metadata_tx: &std::sync::mpsc::Sender<FileMetadata>,
+    upload_tx: &ShardedChannel<UploadRequest>,
+    stores: Arc<Vec<DataStore>>,
+) {
+    let hash_rx = hash_rx.clone();
+    let metadata_tx = metadata_tx.clone();
+    let upload_tx = upload_tx.clone();
 
     thread::spawn(move|| {
-        for entry in WalkDir::new("/home/david/local/cad") {
-            let con = create_database().unwrap();
-            let tx = tx.clone();
+        let con = db_connect().unwrap();
 
-            let os = openstack::Cloud::from_env()
-                .expect("Failed to create an identity provider from the environment");
-            let bucket = swift::Bucket::new(&os, "bucket");
-            let dir_entry = entry.unwrap();
-            let metadata = dir_entry.metadata().unwrap();
-
+        while let Ok(dir_entry) = hash_rx.recv() {
+            print!("Processing hash request: {:?}\n", dir_entry.file_name());
+            let file_type = filetype_from(dir_entry.file_type());
             let mut destination: Option<String> = None;
             let mut data_hash: Option<String> = None;
-
-            let file_type = filetype_from(dir_entry.file_type());
-
-            let path = dir_entry.path().to_string_lossy();
-
+            let metadata = dir_entry.metadata().unwrap();
             match file_type {
                 Some(FileType::FILE) => {
                     let metadata_hash = generate_metadata_hash(metadata.len(), metadata.mtime(), dir_entry.path());
-                    data_hash = process_file(&con, bucket, &path, &metadata_hash);    
+                    let filename = dir_entry.path().to_string_lossy();
+                    let d_hash = process_file(
+                        &con, 
+                        dir_entry.path(),
+                        &metadata_hash
+                    );
+
+                    d_hash.map(|d_hash| {
+                        if !is_data_in_cold_storage(&con, &d_hash, &stores).unwrap() {
+                            upload_tx.send(UploadRequest {
+                                filename: filename.to_string(),  
+                                data_hash: d_hash.clone(),
+                            }, d_hash.clone().as_str()).unwrap();
+                        }
+                        data_hash = Some(d_hash);
+                    }).unwrap();
                 }
                 Some(FileType::SYMLINK) => {
                     destination = Some(std::fs::read_link(dir_entry.path()).unwrap().to_string_lossy().to_string());
@@ -261,25 +262,129 @@ fn main() {
                 }
             }
 
-            match file_type {
-                Some(t) => {
-                    tx.send(FileMetadata {
-                        name: path.to_string(),
-                        mtime: metadata.mtime(),
-                        mode: metadata.mode(),
-                        xattr: HashMap::new(),
-                        ttype: t,
-                        destination,
-                        data_hash,
-                    }).unwrap();
+            file_type.map(|ttype| {
+                metadata_tx.send(FileMetadata {
+                    name: dir_entry.path().to_string_lossy().to_string(),
+                    mtime: metadata.mtime(),
+                    mode: metadata.mode(),
+                    xattr: HashMap::new(),
+                    ttype: ttype,
+                    destination,
+                    data_hash,
+                }).unwrap();
+            });
+        }
+        print!("Done with hashing\n");
+    });
+}
+
+fn create_upload_workers(stores: Arc<Vec<DataStore>>) -> ShardedChannel<UploadRequest> {
+    sharding::ShardedChannel::new(4, |f| {
+        create_upload_worker(f, stores.clone());
+    })
+}
+
+fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>) {
+    static mut x: u32 = 1;
+    let id = unsafe {
+        x += 1;
+        x
+    };
+    thread::spawn(move|| {            
+        let con = db_connect().unwrap();
+        let os = openstack::Cloud::from_env()
+            .expect("Failed to create an identity provider from the environment");
+        let bucket = swift::Bucket::new(&os, "bucket");
+
+        while let Ok(request) = upload_rx.recv() {
+            print!("Processing upload request: {:?} {} ({})\n", request.filename, request.data_hash, id);
+            if is_data_in_cold_storage(&con, &request.data_hash, &stores).unwrap() {
+                print!("Skipping duplicate hash {}\n", request.data_hash);
+            } else {
+                let destination_filename = format!("data/{}.gpg", request.data_hash);
+                {
+                    let mut file = fs::File::open(request.filename).unwrap();
+                    let mut destination = File::create(&destination_filename).unwrap();
+                    encryption::encrypt_file(&mut file, &mut destination).unwrap();
                 }
-                _ => {}
+                let encrypted_file = fs::File::open(&destination_filename).unwrap();
+                let key = format!("data/{}", request.data_hash);
+                match bucket.upload(&key, encrypted_file) {
+                    Ok(_) => {
+                        set_data_in_cold_storage(&con, request.data_hash.as_str(), "", 1).unwrap();
+                    },
+                    _ => {}
+                }
             }
+        }
+        print!("Done with uploads\n");
+    });
+}
+
+// fn create_upload_workers(upload_rx: crossbeam_channel::Receiver<UploadRequest>) {
+//     for _n in 0..4 {
+//         create_upload_worker(&upload_rx);
+//     }
+// }
+// fn create_upload_worker(upload_rx: &crossbeam_channel::Receiver<UploadRequest>) {
+//     let upload_rx = upload_rx.clone();
+//     thread::spawn(move|| {            
+//         let con = db_connect().unwrap();
+//         let os = openstack::Cloud::from_env()
+//             .expect("Failed to create an identity provider from the environment");
+//         let bucket = swift::Bucket::new(&os, "bucket");
+
+//         while let Ok(request) = upload_rx.recv() {
+//             print!("Processing upload request: {:?}\n", request.filename);
+//             let destination_filename = format!("data/{}.gpg", request.data_hash);
+//             {
+//                 let mut file = fs::File::open(request.filename).unwrap();
+//                 let mut destination = File::create(&destination_filename).unwrap();
+//                 encryption::encrypt_file(&mut file, &mut destination).unwrap();
+//             }
+//             let encrypted_file = fs::File::open(&destination_filename).unwrap();
+//             let key = format!("data/{}", request.data_hash);
+//             match bucket.upload(&key, encrypted_file) {
+//                 Ok(_) => {
+//                     set_data_in_cold_storage(&con, request.data_hash.as_str(), "", 1).unwrap();
+//                 },
+//                 _ => {}
+//             }
+//         }
+//         print!("Done with uploads\n");
+//     });
+// }
+
+fn main() {
+    let connection = db_connect().unwrap();
+
+    db_init(&connection);
+
+// todo:
+// first of all, delete anything from uploaded where md5sum_hash is null
+// then delete from fs_hash_cache where in_use is false
+
+    let (metadata_tx, metadata_rx) = channel();
+    let (hash_tx, hash_rx) = crossbeam_channel::unbounded();
+    //let (upload_tx, upload_rx) = crossbeam_channel::unbounded();
+
+    thread::spawn(move|| {
+        for entry in WalkDir::new("/home/david/local/cad") {
+            hash_tx.send(entry.unwrap()).unwrap();
         }
     });
 
-    write_metadata_file(rx);
+    let mut stores = Vec::new();
+
+    stores.push(DataStore {
+        id: 1,
+    });
+
+    let stores = Arc::new(stores);
+
+    let uploadChannel = create_upload_workers(stores.clone()); //todo: encryption
+    create_hash_workers(hash_rx, metadata_tx, uploadChannel, stores);
     
-    encryption::do_encryption().unwrap();
+    write_metadata_file(metadata_rx);
 
 }
