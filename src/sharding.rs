@@ -24,7 +24,7 @@ impl<T> ShardedChannel<T> {
     where F: Fn(Receiver<T>) -> ()
   {
     let mut transmitters = Vec::new();
-    for i in 1..count {
+    for i in 0..count {
       let (tx, rx) = channel();
       transmitters.push(tx);
       f(rx);

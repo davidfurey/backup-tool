@@ -207,12 +207,12 @@ fn write_metadata_file(metadata_rx: Receiver<FileMetadata>) {
 fn create_hash_workers(
     hash_rx: crossbeam_channel::Receiver<walkdir::DirEntry>,
     metadata_tx: std::sync::mpsc::Sender<FileMetadata>,
-    upload_tx: ShardedChannel<UploadRequest>,
+    upload_tx: &ShardedChannel<UploadRequest>,
     stores:  Arc<Vec<DataStore>>,
 ) {
     //let stores = Arc::new(stores);
     for _n in 0..4 {
-        create_hash_worker(&hash_rx, &metadata_tx, &upload_tx, stores.clone());
+        create_hash_worker(&hash_rx, &metadata_tx, upload_tx, stores.clone());
      } 
 }
 
@@ -309,6 +309,8 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
                 }
                 let encrypted_file = fs::File::open(&destination_filename).unwrap();
                 let key = format!("data/{}", request.data_hash);
+
+                // todo: actually check and upload for multiple buckets
                 match bucket.upload(&key, encrypted_file) {
                     Ok(_) => {
                         set_data_in_cold_storage(&con, request.data_hash.as_str(), "", 1).unwrap();
@@ -382,9 +384,20 @@ fn main() {
 
     let stores = Arc::new(stores);
 
-    let uploadChannel = create_upload_workers(stores.clone()); //todo: encryption
-    create_hash_workers(hash_rx, metadata_tx, uploadChannel, stores);
+    let upload_channel = create_upload_workers(stores.clone());
+
+    create_hash_workers(hash_rx, metadata_tx, &upload_channel, stores);
     
+    drop(upload_channel);
+    drop(connection);
+//    drop(metadata_rx);
+//    drop(metadata_tx);
+//    drop(hash_tx);
+//    drop(hash_rx);
+//    drop(stores);
+
     write_metadata_file(metadata_rx);
 
+    // todo: wait for all threads to finish
+    thread::sleep(std::time::Duration::from_millis(30000));
 }
