@@ -2,15 +2,19 @@ pub mod encryption;
 pub mod decryption;
 pub mod sharding;
 pub mod swift;
+pub mod datastore;
+pub mod metadata_file;
+pub mod sqlite_cache;
+
+use datastore::DataStore;
 
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use std::thread;
 use std::os::unix::prelude::MetadataExt;
 use std::io;
 use std::fs;
 use std::path::Path;
-use rusqlite::{Connection, Result, Error};
+use rusqlite::Result;
 use sha2::{Sha256, Digest};
 use hmac::{Hmac, Mac};
 use sharding::ShardedChannel;
@@ -19,18 +23,19 @@ use std::sync::mpsc::channel;
 use std::collections::HashMap;
 use std::fs::File;
 use walkdir::WalkDir;
+use swift::Bucket;
+use sqlite_cache::Cache;
 
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate rmp_serde as rmps;
 
-use serde::{Serialize};
-use rmps::{Serializer};
+use serde::Serialize;
 
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-enum FileType {
+pub enum FileType {
     FILE,
     SYMLINK,
     DIRECTORY,
@@ -42,81 +47,14 @@ struct UploadRequest {
     data_hash: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct FileMetadata {
-    name: String,
-    mtime: i64,
-    mode: u32,
-    xattr: HashMap<String, String>,
-    ttype: FileType,
-    destination: Option<String>,
-    data_hash: Option<String>,
+fn generate_metadata_hash(len: u64, mtime: i64, path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(len.to_ne_bytes());
+    hasher.update(mtime.to_ne_bytes());
+    hasher.update(path.as_os_str().as_bytes());
+    format!("{:X}", hasher.finalize())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct FileData {
-    data: Vec<FileMetadata>,
-}
-
-struct DataStore {
-    id: i32,
-}
-
-fn db_connect() -> Result<Connection, Error> {
-    return Connection::open("cache.db");
-}
-
-fn db_init(connection: &Connection) {
-    connection.execute("CREATE TABLE IF NOT EXISTS fs_hash_cache (fs_hash CHARACTER(128) UNIQUE, data_hash CHARACTER(128) NULL, in_use BOOLEAN);", []).unwrap();
-    connection.execute("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT UNIQUE, encrypted_md5 TEXT NULL, datastore_id INTEGER);", []).unwrap();
-}
-
-fn mark_used_and_lookup_hash(connection: &Connection, filename: &str) -> Result<Option<String>, rusqlite::Error> {
-    let mut stmt = connection.prepare("INSERT INTO fs_hash_cache (fs_hash, in_use) VALUES(?, true) ON CONFLICT(fs_hash) do UPDATE set in_use = true RETURNING data_hash").unwrap();
-    let mut rows = stmt.query([filename]).unwrap();
-    let row = rows.next();
-    match row {
-        Ok(Some(r)) => r.get(0),
-        Ok(None) => Ok(None),
-        Err(x) => Err(x),
-    }
-}
-
-fn is_data_in_cold_storage(connection: &Connection, data_hash: &String, stores: &Vec<DataStore>) -> Result<bool, rusqlite::Error> {
-    let mut stmt = connection.prepare("SELECT 1 FROM uploaded_objects WHERE data_hash = ? and datastore_id = ?").unwrap();
-    for store in stores {
-        let mut rows = stmt.query([data_hash, store.id.to_string().as_str()]).unwrap();
-        match rows.next() {
-            Ok(None) => return Ok(false),
-            Ok(_) => { },
-            Err(x) => return Err(x)
-        };
-    }
-    return Ok(true);
-}
-
-// fn set_data_in_cold_storage(connection: &Connection, hash: &str) -> Result<usize, rusqlite::Error> {
-//     let mut stmt = connection.prepare("INSERT OR IGNORE INTO uploaded_objects VALUES (?, NULL)").unwrap();
-//     return stmt.execute([hash]);
-// }
-
-fn set_data_in_cold_storage(connection: &Connection, hash: &str, md5_hash: &str, datastore_id: i32) -> Result<usize, rusqlite::Error> {
-    let mut stmt = connection.prepare("INSERT INTO uploaded_objects VALUES (?, ?, ?)").unwrap();
-    return stmt.execute([hash, md5_hash, datastore_id.to_string().as_str()]);
-}
-
-
-// fn update_hash_in_cold_storage(connection: &Connection, hash: &str, md5_hash: &str) -> Result<usize, rusqlite::Error> {
-//     let mut stmt = connection.prepare("UPDATE uploaded_objects set encrypted_md5 = ? where data_hash = ?").unwrap();
-//     return stmt.execute([hash, md5_hash]);
-// }
-
-fn set_data_hash(connection: &Connection, metadata_hash: &str, data_hash: &str) -> Result<usize, rusqlite::Error> {
-    let mut stmt = connection.prepare("UPDATE fs_hash_cache set data_hash = ? where fs_hash = ?").unwrap();
-    return stmt.execute([data_hash, metadata_hash]);
-}
-
-// todo: HMAC secret key
 fn hash_file(path: &Path) -> String {
     type HmacSha256 = Hmac<Sha256>;
     let mut hasher = HmacSha256::new_from_slice(b"my secret and secure key")
@@ -128,23 +66,15 @@ fn hash_file(path: &Path) -> String {
     return format!("{:X}", digest);
 }
 
-fn process_file(connection: &Connection, path: &Path, metadata_hash: &str) -> Result<String, rusqlite::Error> {
-    let res = mark_used_and_lookup_hash(&connection, metadata_hash);
+fn process_file(cache: &Cache, path: &Path, metadata_hash: &str) -> Result<String, rusqlite::Error> {
+    let res = cache.mark_used_and_lookup_hash(metadata_hash);
     res.map(|v| {
         v.unwrap_or_else(|| {
             let data_hash = hash_file(path);
-            set_data_hash(&connection, metadata_hash, &data_hash).unwrap();
+            cache.set_data_hash(metadata_hash, &data_hash).unwrap();
             data_hash
         })
     })
-}
-
-fn generate_metadata_hash(len: u64, mtime: i64, path: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(len.to_ne_bytes());
-    hasher.update(mtime.to_ne_bytes());
-    hasher.update(path.as_os_str().as_bytes());
-    format!("{:X}", hasher.finalize())
 }
 
 fn filetype_from(t: fs::FileType) -> Option<FileType> {
@@ -159,54 +89,10 @@ fn filetype_from(t: fs::FileType) -> Option<FileType> {
     }
 }
 
-fn write_metadata_file(metadata_rx: Receiver<FileMetadata>) {
-    let mut vec = Vec::new();
-
-    while let Ok(msg) = metadata_rx.recv() {
-        vec.push(msg);
-    }
-
-    let data = FileData {
-        data: vec,
-    };
-
-    let destination = File::create("test.dat").unwrap();
-
-    data.serialize(&mut Serializer::new(destination)).unwrap();
-}
-
-
-// fn list_objects() {
-//     let os = openstack::Cloud::from_env()
-//         .expect("Failed to create an identity provider from the environment");
-
-//     let container_name = "bucket";
-//     let container = os.get_container(&container_name).expect("Cannot get a container");
-
-//     println!("Found container with Name = {}, Number of object = {}",
-//         container.name(),
-//         container.object_count()
-//     );
-
-//     let objects: Vec<openstack::object_storage::Object> = container
-//         .find_objects()
-//         .with_limit(10)
-//         .all()
-//         .expect("cannot list objects");
-
-//     println!("first 10 objects");
-//     for o in objects {
-//         println!("Name = {}, Bytes = {}, Hash = {}",
-//             o.name(),
-//             o.bytes(),
-//             o.hash().as_ref().unwrap_or(&String::from("")),
-//         );
-//     }
-// }
 
 fn create_hash_workers(
     hash_rx: crossbeam_channel::Receiver<walkdir::DirEntry>,
-    metadata_tx: std::sync::mpsc::Sender<FileMetadata>,
+    metadata_tx: std::sync::mpsc::Sender<metadata_file::FileMetadata>,
     upload_tx: &ShardedChannel<UploadRequest>,
     stores:  Arc<Vec<DataStore>>,
 ) {
@@ -218,7 +104,7 @@ fn create_hash_workers(
 
 fn create_hash_worker(
     hash_rx: &crossbeam_channel::Receiver<walkdir::DirEntry>,
-    metadata_tx: &std::sync::mpsc::Sender<FileMetadata>,
+    metadata_tx: &std::sync::mpsc::Sender<metadata_file::FileMetadata>,
     upload_tx: &ShardedChannel<UploadRequest>,
     stores: Arc<Vec<DataStore>>,
 ) {
@@ -227,7 +113,7 @@ fn create_hash_worker(
     let upload_tx = upload_tx.clone();
 
     thread::spawn(move|| {
-        let con = db_connect().unwrap();
+        let cache = Cache::new();
 
         while let Ok(dir_entry) = hash_rx.recv() {
             print!("Processing hash request: {:?}\n", dir_entry.file_name());
@@ -240,13 +126,13 @@ fn create_hash_worker(
                     let metadata_hash = generate_metadata_hash(metadata.len(), metadata.mtime(), dir_entry.path());
                     let filename = dir_entry.path().to_string_lossy();
                     let d_hash = process_file(
-                        &con, 
+                        &cache, 
                         dir_entry.path(),
                         &metadata_hash
                     );
 
                     d_hash.map(|d_hash| {
-                        if !is_data_in_cold_storage(&con, &d_hash, &stores).unwrap() {
+                        if !cache.is_data_in_cold_storage(&d_hash, &stores).unwrap() {
                             upload_tx.send(UploadRequest {
                                 filename: filename.to_string(),  
                                 data_hash: d_hash.clone(),
@@ -263,7 +149,7 @@ fn create_hash_worker(
             }
 
             file_type.map(|ttype| {
-                metadata_tx.send(FileMetadata {
+                metadata_tx.send(metadata_file::FileMetadata {
                     name: dir_entry.path().to_string_lossy().to_string(),
                     mtime: metadata.mtime(),
                     mode: metadata.mode(),
@@ -285,37 +171,40 @@ fn create_upload_workers(stores: Arc<Vec<DataStore>>) -> ShardedChannel<UploadRe
 }
 
 fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>) {
-    static mut x: u32 = 1;
+    static mut UPLOAD_ID_COUNT: u32 = 1;
     let id = unsafe {
-        x += 1;
-        x
+        UPLOAD_ID_COUNT += 1;
+        UPLOAD_ID_COUNT
     };
-    thread::spawn(move|| {            
-        let con = db_connect().unwrap();
-        let os = openstack::Cloud::from_env()
-            .expect("Failed to create an identity provider from the environment");
-        let bucket = swift::Bucket::new(&os, "bucket");
+    thread::spawn(move|| {
+        let buckets: Vec<Bucket> = stores.iter().map(|store| {
+            store.init()
+        }).collect();
+        let cache = Cache::new();
 
         while let Ok(request) = upload_rx.recv() {
             print!("Processing upload request: {:?} {} ({})\n", request.filename, request.data_hash, id);
-            if is_data_in_cold_storage(&con, &request.data_hash, &stores).unwrap() {
+            if cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
                 print!("Skipping duplicate hash {}\n", request.data_hash);
             } else {
                 let destination_filename = format!("data/{}.gpg", request.data_hash);
                 {
-                    let mut file = fs::File::open(request.filename).unwrap();
-                    let mut destination = File::create(&destination_filename).unwrap();
-                    encryption::encrypt_file(&mut file, &mut destination).unwrap();
+                    let mut source = fs::File::open(request.filename).unwrap();
+                    let mut dest = File::create(&destination_filename).unwrap();
+                    encryption::encrypt_file(&mut source, &mut dest).unwrap();
                 }
-                let encrypted_file = fs::File::open(&destination_filename).unwrap();
-                let key = format!("data/{}", request.data_hash);
 
-                // todo: actually check and upload for multiple buckets
-                match bucket.upload(&key, encrypted_file) {
-                    Ok(_) => {
-                        set_data_in_cold_storage(&con, request.data_hash.as_str(), "", 1).unwrap();
-                    },
-                    _ => {}
+                for bucket in buckets.as_slice() {
+                    let encrypted_file = fs::File::open(&destination_filename).unwrap();
+                    let key = format!("data/{}", request.data_hash);
+                    match bucket.upload(&key, encrypted_file) {
+                        Ok(_) => {
+                            cache.set_data_in_cold_storage(request.data_hash.as_str(), "", 1).unwrap();
+                        },
+                        _ => {
+                            // throw exception here?
+                        }
+                    }
                 }
             }
         }
@@ -323,44 +212,9 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
     });
 }
 
-// fn create_upload_workers(upload_rx: crossbeam_channel::Receiver<UploadRequest>) {
-//     for _n in 0..4 {
-//         create_upload_worker(&upload_rx);
-//     }
-// }
-// fn create_upload_worker(upload_rx: &crossbeam_channel::Receiver<UploadRequest>) {
-//     let upload_rx = upload_rx.clone();
-//     thread::spawn(move|| {            
-//         let con = db_connect().unwrap();
-//         let os = openstack::Cloud::from_env()
-//             .expect("Failed to create an identity provider from the environment");
-//         let bucket = swift::Bucket::new(&os, "bucket");
-
-//         while let Ok(request) = upload_rx.recv() {
-//             print!("Processing upload request: {:?}\n", request.filename);
-//             let destination_filename = format!("data/{}.gpg", request.data_hash);
-//             {
-//                 let mut file = fs::File::open(request.filename).unwrap();
-//                 let mut destination = File::create(&destination_filename).unwrap();
-//                 encryption::encrypt_file(&mut file, &mut destination).unwrap();
-//             }
-//             let encrypted_file = fs::File::open(&destination_filename).unwrap();
-//             let key = format!("data/{}", request.data_hash);
-//             match bucket.upload(&key, encrypted_file) {
-//                 Ok(_) => {
-//                     set_data_in_cold_storage(&con, request.data_hash.as_str(), "", 1).unwrap();
-//                 },
-//                 _ => {}
-//             }
-//         }
-//         print!("Done with uploads\n");
-//     });
-// }
 
 fn main() {
-    let connection = db_connect().unwrap();
-
-    db_init(&connection);
+    Cache::init();
 
 // todo:
 // first of all, delete anything from uploaded where md5sum_hash is null
@@ -380,6 +234,7 @@ fn main() {
 
     stores.push(DataStore {
         id: 1,
+        container: "bucket".to_string(),
     });
 
     let stores = Arc::new(stores);
@@ -389,14 +244,8 @@ fn main() {
     create_hash_workers(hash_rx, metadata_tx, &upload_channel, stores);
     
     drop(upload_channel);
-    drop(connection);
-//    drop(metadata_rx);
-//    drop(metadata_tx);
-//    drop(hash_tx);
-//    drop(hash_rx);
-//    drop(stores);
 
-    write_metadata_file(metadata_rx);
+    metadata_file::write_metadata_file(metadata_rx);
 
     // todo: wait for all threads to finish
     thread::sleep(std::time::Duration::from_millis(30000));

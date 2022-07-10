@@ -7,24 +7,12 @@ pub struct ShardedChannel<T> {
   tx: Vec<Sender<T>>,
 }
 
-// unsafe impl<T: Send> Send for Receiver<T> {}
-// unsafe impl<T: Send> Send for Receiver<T> {}
-
-// The send port can be sent from place to place, so long as it
-// is not used to send non-sendable things.
-//#[stable(feature = "rust1", since = "1.0.0")]
-//unsafe impl<T: Send> Send for Sender<T> {}
-
-// unsafe impl<T: Send> Send for ShardedChannel<T> {}
-
-// impl<T> !Sync for ShardedChannel<T> {}
-
 impl<T> ShardedChannel<T> {
   pub fn new<F>(count: u32, f: F) -> ShardedChannel<T> 
     where F: Fn(Receiver<T>) -> ()
   {
     let mut transmitters = Vec::new();
-    for i in 0..count {
+    for _ in 0..count {
       let (tx, rx) = channel();
       transmitters.push(tx);
       f(rx);
