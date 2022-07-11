@@ -12,55 +12,14 @@ use openpgp::policy::StandardPolicy as P;
 use openpgp::types::Timestamp;
 use openpgp::Cert;
 
-pub fn do_encryption() -> openpgp::Result<()> {
-    let p = &P::new();
-
-    let key = Cert::from_file("priv.key")?;
-    //let key = generate()?;
-
-    let mut destination = File::create("test.gpg").unwrap();
-    let mut source = File::open("data.txt").unwrap();
-    encrypt(p, &mut source, &mut destination, &key)?;
-
-    let mut f = File::open("test.gpg").unwrap();
-    // let mut w = Writer::new(io::stdout(), Kind::SecretKey)?;
-    // key.as_tsk().serialize(&mut w)?;
-    // w.finalize()?;
-    
-    // Decrypt the message.
-    let mut plaintext = Vec::new();
-    decrypt(p, &mut plaintext, &mut f, &key)?;
-
-    // assert_eq!(MESSAGE.as_bytes(), &plaintext[..]);
-
-    Ok(())
-}
-//Write + Send + Sync
-pub fn encrypt_file(source: &mut File, dest: &mut File) -> openpgp::Result<()> {
+pub fn encrypt_file(source: &mut File, dest: &mut File, key: &Cert) -> openpgp::Result<()> {
   let p = &P::new();
-
-  let key = Cert::from_file("priv.key")?;
-  //let key = generate()?;
 
   encrypt(p, source, dest, &key)?;
 
   Ok(())
 }
 
-
-// /// Generates an encryption-capable key.
-// fn generate() -> openpgp::Result<openpgp::Cert> {
-//     let (cert, _revocation) = CertBuilder::new()
-//         .add_userid("someone@example.org")
-//         .add_transport_encryption_subkey()
-//         .generate()?;
-
-//     // Save the revocation certificate somewhere.
-
-//     Ok(cert)
-// }
-
-/// Encrypts the given message.
 fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send + Sync),
           recipient: &openpgp::Cert)
     -> openpgp::Result<()>

@@ -8,14 +8,14 @@ pub struct ShardedChannel<T> {
 }
 
 impl<T> ShardedChannel<T> {
-  pub fn new<F>(count: u32, f: F) -> ShardedChannel<T> 
+  pub fn new<F>(count: u32, receiver: F) -> ShardedChannel<T> 
     where F: Fn(Receiver<T>) -> ()
   {
     let mut transmitters = Vec::new();
     for _ in 0..count {
       let (tx, rx) = channel();
       transmitters.push(tx);
-      f(rx);
+      receiver(rx);
     }
     return ShardedChannel { tx: transmitters }
   }
@@ -29,10 +29,9 @@ impl<T> ShardedChannel<T> {
 
 impl<T> Clone for ShardedChannel<T> {
     fn clone(&self) -> ShardedChannel<T> {
-      let mut transmitters = Vec::new();
-      for i in &self.tx {
-        transmitters.push(i.clone());
-      }
+      let transmitters: Vec<Sender<T>> = self.tx.iter().map(|s| {
+        s.clone()
+      }).collect();
       ShardedChannel {
         tx: transmitters
       }
