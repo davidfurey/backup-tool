@@ -158,6 +158,7 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
 struct BackupConfig {
     source: PathBuf,
     data_cache: PathBuf,
+    metadata_cache: PathBuf,
     stores: Vec<DataStore>,
     hmac_secret: String,
     key_file: PathBuf,
@@ -184,7 +185,7 @@ fn run_backup(config: BackupConfig) {
         create_hash_workers(hash_rx, metadata_tx, &upload_channel, &stores, config.hmac_secret);
     }
 
-    metadata_file::write_metadata_file(metadata_rx, stores.clone());
+    metadata_file::write_metadata_file(&config.metadata_cache, metadata_rx, stores.clone());
 
     // todo: wait for all threads to finish
     thread::sleep(std::time::Duration::from_millis(30000));
@@ -208,6 +209,7 @@ fn main() {
         source: PathBuf::from("/home/david/local/cad"),
         stores,
         data_cache: PathBuf::from("/tmp/data"),
+        metadata_cache: PathBuf::from("/tmp/metadata"),
         hmac_secret: "test2".to_string(),
         key_file: PathBuf::from("priv.key"),
     };

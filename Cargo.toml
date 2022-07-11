@@ -18,3 +18,5 @@ openstack = { git = "https://github.com/dtantsur/rust-openstack" }
 walkdir = "2.3.2"
 crossbeam-channel = "0.5.5"
 hmac = "0.12.1"
+chrono = "0.4"
+rand = "0.8.5"

@@ -1,13 +1,14 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::collections::HashMap;
 use std::fs::File;
-
 use serde::Serialize;
 use rmps::Serializer;
-
 use crate::FileType;
 use crate::DataStore;
+use chrono::prelude::{Utc, SecondsFormat};
+use rand::{distributions::Alphanumeric, Rng};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FileData {
@@ -25,7 +26,7 @@ pub struct FileMetadata {
     pub data_hash: Option<String>,
 }
 
-pub fn write_metadata_file(metadata_rx: Receiver<FileMetadata>, stores: Arc<Vec<DataStore>>) {
+pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, stores: Arc<Vec<DataStore>>) {
   let mut vec = Vec::new();
 
   while let Ok(msg) = metadata_rx.recv() {
@@ -36,14 +37,24 @@ pub fn write_metadata_file(metadata_rx: Receiver<FileMetadata>, stores: Arc<Vec<
       data: vec,
   };
 
-  let filename = "test.data";
+  let random_suffix: String = rand::thread_rng()
+    .sample_iter(&Alphanumeric)
+    .take(4)
+    .map(char::from)
+    .collect();
 
-  let destination = File::create(filename).unwrap();
+  let datetime = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+
+  let name = format!("backup-{}-{}.metadata", datetime, random_suffix);
+
+  let filename = path.join(name);
+
+  let destination = File::create(&filename).unwrap();
 
   data.serialize(&mut Serializer::new(destination)).unwrap();
 
   for store in stores.iter() {
-    let metadata_file = std::fs::File::open(filename).unwrap();
+    let metadata_file = std::fs::File::open(&filename).unwrap();
     store.metadata_bucket().upload("foo", metadata_file).unwrap();
   }
 }
