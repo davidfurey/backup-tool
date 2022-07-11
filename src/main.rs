@@ -15,7 +15,6 @@ use std::os::unix::prelude::MetadataExt;
 use std::fs;
 use std::fs::File;
 use std::sync::mpsc::channel;
-use std::collections::HashMap;
 
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
@@ -93,7 +92,6 @@ fn create_hash_worker(
                     name: dir_entry.path().to_string_lossy().to_string(),
                     mtime: metadata.mtime(),
                     mode: metadata.mode(),
-                    xattr: HashMap::new(),
                     ttype: ttype,
                     destination,
                     data_hash,

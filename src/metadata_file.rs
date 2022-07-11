@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::collections::HashMap;
 use std::fs::File;
 use serde::Serialize;
 use rmps::Serializer;
@@ -20,7 +19,6 @@ pub struct FileMetadata {
     pub name: String,
     pub mtime: i64,
     pub mode: u32,
-    pub xattr: HashMap<String, String>,
     pub ttype: FileType,
     pub destination: Option<String>,
     pub data_hash: Option<String>,
