@@ -22,7 +22,7 @@ impl Cache {
   pub fn init() {
     let connection = Cache::db_connect().unwrap();
     connection.execute("CREATE TABLE IF NOT EXISTS fs_hash_cache (fs_hash CHARACTER(128) UNIQUE, data_hash CHARACTER(128) NULL, in_use BOOLEAN);", []).unwrap();
-    connection.execute("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT UNIQUE, encrypted_md5 TEXT NULL, datastore_id INTEGER);", []).unwrap();
+    connection.execute("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT, encrypted_md5 TEXT NULL, datastore_id INTEGER, UNIQUE(data_hash, datastore_id));", []).unwrap(); // todo
     connection.execute("UPDATE fs_hash_cache set in_use = false;", []).unwrap();
   }
 

@@ -10,7 +10,7 @@ pub mod filetype;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::os::unix::prelude::MetadataExt;
 use std::fs;
 use std::fs::File;
@@ -64,7 +64,6 @@ fn create_hash_worker(
         let cache = Cache::new();
 
         while let Ok(dir_entry) = hash_rx.recv() {
-            print!("Processing hash request: {:?}\n", dir_entry.file_name());
             let file_type = FileType::from(dir_entry.file_type());
             let mut destination: Option<String> = None;
             let mut data_hash: Option<String> = None;
@@ -78,6 +77,8 @@ fn create_hash_worker(
                             filename: dir_entry.path().to_path_buf(),  
                             data_hash: d_hash.clone(),
                         }, d_hash.as_str()).unwrap();
+                    } else {
+                        print!("Skipping {:?} ({:?} already uploaded)\n", dir_entry.file_name(), d_hash);
                     }
                     data_hash = Some(d_hash);
                 }
@@ -108,12 +109,12 @@ fn create_upload_workers(stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key:
     })
 }
 
-fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert) {
-    static mut UPLOAD_ID_COUNT: u32 = 1;
-    let id = unsafe {
-        UPLOAD_ID_COUNT += 1;
-        UPLOAD_ID_COUNT
-    };
+fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert) -> JoinHandle<()> {
+//    static mut UPLOAD_ID_COUNT: u32 = 1;
+    // let id = unsafe {
+    //     UPLOAD_ID_COUNT += 1;
+    //     UPLOAD_ID_COUNT
+    // };
     let key = key.clone();
     let data_cache = data_cache.clone();
     thread::spawn(move|| {
@@ -123,10 +124,10 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
         let cache = Cache::new();
 
         while let Ok(request) = upload_rx.recv() {
-            print!("Processing upload request: {:?} {} ({})\n", request.filename, request.data_hash, id);
             if cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
-                print!("Skipping duplicate hash {}\n", request.data_hash);
+                print!("Skipping {:?} ({:?} already uploaded)\n", &request.filename, request.data_hash);
             } else {
+                print!("Uploading {:?} ({:?})\n", request.filename, request.data_hash);
                 let destination_filename = data_cache.join(&request.data_hash);
                 {
                     let mut source = fs::File::open(request.filename).unwrap();
@@ -149,10 +150,10 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
             }
         }
         print!("Done with uploads\n");
-    });
+    })
 }
 
-
+#[derive(Deserialize)]
 struct BackupConfig {
     source: PathBuf,
     data_cache: PathBuf,
@@ -186,31 +187,15 @@ fn run_backup(config: BackupConfig) {
     metadata_file::write_metadata_file(&config.metadata_cache, metadata_rx, stores.clone());
 
     // todo: wait for all threads to finish
-    thread::sleep(std::time::Duration::from_millis(30000));
+//    thread::sleep(std::time::Duration::from_millis(30000));
 
     Cache::cleanup();
 }
 
 
 fn main() {
-    let mut stores = Vec::new();
-
-    stores.push(DataStore {
-        id: 1,
-        data_container: "bucket".to_string(),
-        metadata_container: "metadata".to_string(),
-        data_prefix: "data/".to_string(),
-        metadata_prefix: "metadata/".to_string(),
-    });
-
-    let config = BackupConfig {
-        source: PathBuf::from("/home/david/local/cad"),
-        stores,
-        data_cache: PathBuf::from("/tmp/data"),
-        metadata_cache: PathBuf::from("/tmp/metadata"),
-        hmac_secret: "test2".to_string(),
-        key_file: PathBuf::from("priv.key"),
-    };
+    let content = std::fs::read_to_string("backup.toml").unwrap();
+    let config: BackupConfig = toml::from_str(&content).unwrap();
 
     run_backup(config);
 }

@@ -1,5 +1,8 @@
 use serde::Serialize;
+//use serde_repr::*;
 
+//#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug)]
+//#[repr(u8)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub enum FileType {
     FILE,

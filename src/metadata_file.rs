@@ -49,6 +49,7 @@ pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, 
 
   let destination = File::create(&filename).unwrap();
 
+  //todo: should be encrypted (and signed?)
   data.serialize(&mut Serializer::new(destination)).unwrap();
 
   for store in stores.iter() {

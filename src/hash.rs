@@ -1,14 +1,9 @@
-// use datastore::DataStore;
-
 use std::io;
 use std::fs;
 use std::path::Path;
 use sha2::{Sha512, Digest};
 use hmac::{Hmac, Mac};
-// use sharding::ShardedChannel;
 use std::os::unix::ffi::OsStrExt;
-// use swift::Bucket;
-// use sqlite_cache::Cache;
 
 pub fn metadata(len: u64, mtime: i64, path: &Path) -> String {
   let mut hasher = Sha512::new();

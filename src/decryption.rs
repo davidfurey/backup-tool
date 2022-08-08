@@ -40,17 +40,6 @@ pub fn do_encryption() -> openpgp::Result<()> {
     Ok(())
 }
 
-// /// Generates an encryption-capable key.
-// fn generate() -> openpgp::Result<openpgp::Cert> {
-//     let (cert, _revocation) = CertBuilder::new()
-//         .add_userid("someone@example.org")
-//         .add_transport_encryption_subkey()
-//         .generate()?;
-
-//     // Save the revocation certificate somewhere.
-
-//     Ok(cert)
-// }
 
 /// Encrypts the given message.
 fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send + Sync),

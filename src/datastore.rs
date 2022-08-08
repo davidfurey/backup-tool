@@ -1,7 +1,7 @@
 use crate::swift;
 use swift::Bucket;
 
-
+#[derive(Deserialize)]
 pub struct DataStore {
   pub id: i32,
   pub data_container: String,
