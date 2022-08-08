@@ -72,9 +72,12 @@ impl Cache {
     return Ok(true);
   }
   
-  pub fn set_data_in_cold_storage(&self, hash: &str, md5_hash: &str, datastore_id: i32) -> Result<usize, rusqlite::Error> {
+  pub fn set_data_in_cold_storage(&self, hash: &str, md5_hash: &str, stores: &Vec<DataStore>) -> Result<usize, rusqlite::Error> {
     let mut stmt = self.connection.prepare("INSERT INTO uploaded_objects VALUES (?, ?, ?)").unwrap();
-    return stmt.execute([hash, md5_hash, datastore_id.to_string().as_str()]);
+    for store in stores {
+      stmt.execute([hash, md5_hash, store.id.to_string().as_str()]).unwrap();
+    }
+    return Ok(1);
   }
   
   
