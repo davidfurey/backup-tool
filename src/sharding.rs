@@ -2,7 +2,6 @@ use std::sync::mpsc::SendError;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::Receiver;
-use std::thread::JoinHandle;
 
 pub struct ShardedChannel<T> {
   tx: Vec<Sender<T>>,
@@ -10,7 +9,7 @@ pub struct ShardedChannel<T> {
 
 impl<T> ShardedChannel<T> {
   pub fn new<F>(count: u32, receiver: F) -> ShardedChannel<T> 
-    where F: Fn(Receiver<T>) -> JoinHandle<()>
+    where F: Fn(Receiver<T>)
   {
     let mut transmitters = Vec::new();
     for _ in 0..count {

@@ -10,7 +10,7 @@ pub mod filetype;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::os::unix::prelude::MetadataExt;
 use std::fs;
 use std::fs::File;
@@ -103,13 +103,14 @@ fn create_hash_worker(
     });
 }
 
-fn create_upload_workers(stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert) -> ShardedChannel<UploadRequest> {
-    sharding::ShardedChannel::new(4, |f| {
-        create_upload_worker(f, stores.clone(), data_cache, key);
-    })
+fn create_upload_workers(stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert) -> (ShardedChannel<UploadRequest>, std::sync::mpsc::Receiver<()>) {
+    let (tx, rx) = channel::<()>();
+    (sharding::ShardedChannel::new(4, |f| {
+        create_upload_worker(f, stores.clone(), data_cache, key, tx.clone())
+    }), rx)
 }
 
-fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert) -> JoinHandle<()> {
+fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert, join: std::sync::mpsc::Sender<()>) {
 //    static mut UPLOAD_ID_COUNT: u32 = 1;
     // let id = unsafe {
     //     UPLOAD_ID_COUNT += 1;
@@ -118,6 +119,7 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
     let key = key.clone();
     let data_cache = data_cache.clone();
     thread::spawn(move|| {
+        let _x = join;
         let buckets: Vec<(&DataStore, Bucket)> = stores.iter().map(|store| {
             (store, store.init())
         }).collect();
@@ -140,7 +142,7 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
                     let key = format!("{}{}", store.data_prefix, request.data_hash);
                     match bucket.upload(&key, encrypted_file) {
                         Ok(_) => {
-                            cache.set_data_in_cold_storage(request.data_hash.as_str(), "", 1).unwrap();
+                            cache.set_data_in_cold_storage(request.data_hash.as_str(), "", &stores).unwrap();
                         },
                         _ => {
                             // throw exception here?
@@ -150,7 +152,7 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
             }
         }
         print!("Done with uploads\n");
-    })
+    });
 }
 
 #[derive(Deserialize)]
@@ -177,17 +179,20 @@ fn run_backup(config: BackupConfig) {
 
     let stores = Arc::new(config.stores);
 
-    {
+
+    let sender = {
         let key = Cert::from_file(config.key_file).unwrap();
-        let upload_channel = create_upload_workers(stores.clone(), &config.data_cache, &key);
+        let (upload_channel, s) = create_upload_workers(stores.clone(), &config.data_cache, &key);
 
         create_hash_workers(hash_rx, metadata_tx, &upload_channel, &stores, config.hmac_secret);
-    }
+        s
+    };
 
     metadata_file::write_metadata_file(&config.metadata_cache, metadata_rx, stores.clone());
 
-    // todo: wait for all threads to finish
-//    thread::sleep(std::time::Duration::from_millis(30000));
+    if sender.recv().is_ok() {
+        println!("Unexpected result")
+    }
 
     Cache::cleanup();
 }
