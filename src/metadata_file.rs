@@ -3,9 +3,12 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::fs::File;
 use serde::Serialize;
+extern crate rmp_serde as rmps;
 use rmps::Serializer;
-use crate::FileType;
-use crate::DataStore;
+use crate::filetype;
+use filetype::FileType;
+use crate::datastore;
+use datastore::DataStore;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
 
