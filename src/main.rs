@@ -7,6 +7,7 @@ pub mod metadata_file;
 pub mod sqlite_cache;
 pub mod hash;
 pub mod filetype;
+pub mod config;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use sequoia_openpgp::parse::Parse;
 use walkdir::WalkDir;
 
 use datastore::DataStore;
+use config::BackupConfig;
 use sharding::ShardedChannel;
 use swift::Bucket;
 use sqlite_cache::Cache;
@@ -153,16 +155,6 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
         }
         print!("Done with uploads\n");
     });
-}
-
-#[derive(Deserialize)]
-struct BackupConfig {
-    source: PathBuf,
-    data_cache: PathBuf,
-    metadata_cache: PathBuf,
-    stores: Vec<DataStore>,
-    hmac_secret: String,
-    key_file: PathBuf,
 }
 
 fn run_backup(config: BackupConfig) {
