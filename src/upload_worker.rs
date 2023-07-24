@@ -29,15 +29,7 @@ pub fn create_upload_workers(stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, 
 fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert, join: std::sync::mpsc::Sender<()>) {
   let key = key.clone();
   let data_cache = data_cache.clone();
-  thread::spawn(move|| {
-
-    tokio::runtime::Builder::new_multi_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(async {
-
-
+  tokio::task::spawn_blocking(move || {
       let _x = join;
       let buckets: Vec<(&DataStore, Bucket)> = stores.iter().map(|store| {
           (store, futures::executor::block_on(store.init()))
@@ -72,8 +64,5 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
           }
       }
       print!("Done with uploads\n");
-
-    })
-
   });
 }
