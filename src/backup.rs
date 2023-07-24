@@ -28,14 +28,14 @@ pub fn run_backup(config: BackupConfig) {
 
 
   let sender = {
-      let key = Cert::from_file(config.key_file).unwrap();
+      let key = Cert::from_file(config.key_file.clone()).unwrap();
       let (upload_channel, s) = create_upload_workers(stores.clone(), &config.data_cache, &key);
 
       create_hash_workers(hash_rx, metadata_tx, &upload_channel, &stores, config.hmac_secret);
       s
   };
 
-  metadata_file::write_metadata_file(&config.metadata_cache, metadata_rx, stores.clone());
+  metadata_file::write_metadata_file(&config.metadata_cache, metadata_rx, stores.clone(), &config.key_file);
 
   if sender.recv().is_ok() {
       println!("Unexpected result")

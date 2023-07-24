@@ -6,7 +6,7 @@ extern crate sequoia_openpgp as openpgp;
 use openpgp::crypto::SessionKey;
 use openpgp::types::SymmetricAlgorithm;
 use openpgp::serialize::stream::*;
-use openpgp::parse::{Parse, stream::*};
+use openpgp::parse::stream::*;
 use openpgp::policy::Policy;
 use openpgp::policy::StandardPolicy as P;
 use openpgp::types::Timestamp;
@@ -18,6 +18,33 @@ pub fn encrypt_file(source: &mut File, dest: &mut File, key: &Cert) -> openpgp::
   encrypt(p, source, dest, &key)?;
 
   Ok(())
+}
+
+pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
+          recipient: &'a openpgp::Cert)
+    -> openpgp::Result<openpgp::serialize::stream::Message<'a>>
+{
+    let recipients =
+        recipient.keys().with_policy(p, None).supported().alive().revoked(false)
+        .for_transport_encryption();
+
+    // Start streaming an OpenPGP message.
+    let message = Message::new(sink);
+
+    // We want to encrypt a literal data packet.
+    let message = Encryptor::for_recipients(message, recipients)
+        .build()?;
+
+    let message = Compressor::new(message)
+      .build()?;
+
+    // Emit a literal data packet.
+    let message = LiteralWriter::new(message)
+      .filename("foo")?
+      .date(Timestamp::from(1585925313))?
+      .build()?;
+
+    Ok(message)
 }
 
 fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send + Sync),
@@ -50,27 +77,6 @@ fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send
     // Finalize the OpenPGP message to make sure that all data is
     // written.
     message.finalize()?;
-
-    Ok(())
-}
-
-/// Decrypts the given message.
-fn decrypt(p: &dyn Policy,
-           sink: &mut dyn Write, ciphertext: &mut (dyn Read + Send + Sync), recipient: &openpgp::Cert)
-           -> openpgp::Result<()> {
-    // Make a helper that that feeds the recipient's secret key to the
-    // decryptor.
-    let helper = Helper {
-        secret: recipient,
-        policy: p
-    };
-
-    // Now, create a decryptor with a helper using the given Certs.
-    let mut decryptor = DecryptorBuilder::from_reader(ciphertext)?
-        .with_policy(p, None, helper)?;
-
-    // Decrypt the data.
-    io::copy(&mut decryptor, sink)?;
 
     Ok(())
 }

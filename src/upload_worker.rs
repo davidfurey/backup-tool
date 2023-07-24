@@ -27,17 +27,20 @@ pub fn create_upload_workers(stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, 
 }
 
 fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Arc<Vec<DataStore>>, data_cache: &PathBuf, key: &Cert, join: std::sync::mpsc::Sender<()>) {
-//    static mut UPLOAD_ID_COUNT: u32 = 1;
-  // let id = unsafe {
-  //     UPLOAD_ID_COUNT += 1;
-  //     UPLOAD_ID_COUNT
-  // };
   let key = key.clone();
   let data_cache = data_cache.clone();
   thread::spawn(move|| {
+
+    tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()
+    .unwrap()
+    .block_on(async {
+
+
       let _x = join;
       let buckets: Vec<(&DataStore, Bucket)> = stores.iter().map(|store| {
-          (store, store.init())
+          (store, futures::executor::block_on(store.init()))
       }).collect();
       let cache = Cache::new();
 
@@ -49,6 +52,7 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
               let destination_filename = data_cache.join(&request.data_hash);
               {
                   let mut source = fs::File::open(request.filename).unwrap();
+                  print!("Creating {:?}\n", destination_filename);
                   let mut dest = File::create(&destination_filename).unwrap();
                   encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
               }
@@ -56,17 +60,20 @@ fn create_upload_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, sto
               for (store, bucket) in buckets.as_slice() {
                   let encrypted_file = fs::File::open(&destination_filename).unwrap();
                   let key = format!("{}{}", store.data_prefix, request.data_hash);
-                  match bucket.upload(&key, encrypted_file) {
+                  match futures::executor::block_on(bucket.upload(&key, encrypted_file)) {
                       Ok(_) => {
                           cache.set_data_in_cold_storage(request.data_hash.as_str(), "", &stores).unwrap();
                       },
                       _ => {
-                          // throw exception here?
+                          // todo: throw exception here?
                       }
                   }
               }
           }
       }
       print!("Done with uploads\n");
+
+    })
+
   });
 }

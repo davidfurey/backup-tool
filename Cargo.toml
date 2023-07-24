@@ -6,16 +6,28 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+filetime = "0.2"
 rusqlite = "0.27.0"
-sha2 = "0.10.2"
-sequoia-openpgp = "1.9.0"
+sha2 = "0.10.7"
+sha1collisiondetection = "0.2.7" # should be got from sequoia-openpgp but we need to pull in a newer version to avoid pointer error (https://gitlab.com/sequoia-pgp/sha1collisiondetection/-/commit/4cd6e3fec53388804054066e3d911782a53f4960)
+sequoia-openpgp = "1.16.0"
 rmp-serde = "1.1.0"
 serde = "1.0.137"
 serde_derive = "1.0.137"
-openstack = { git = "https://github.com/dtantsur/rust-openstack" }
+# openstack = { git = "https://github.com/dtantsur/rust-openstack" }
+openstack = { version = "^0.5" }
+#osauth = { git = "https://github.com/dtantsur/rust-osauth", rev = "0ea8be6750b439b9a129500a62d427f49d57280d" } # why was this pinned?
+# osauth = { git = "https://github.com/dtantsur/rust-osauth", rev = "065975e0d73744bd28802b6b03c8f57263cf6a77" }
+osauth = { version = "^0.4" }
 walkdir = "2.3.2"
 crossbeam-channel = "0.5.5"
 hmac = "0.12.1"
 chrono = "0.4"
 rand = "0.8.5"
 toml = "0.5.9"
+futures-core = "0.3"
+futures = "^0.3"
+reqwest = { version = "^0.11", default-features = false, features = ["gzip", "json", "stream"] }
+tokio-util = { version = "0.7.8", features = ["io"] }
+tokio = { version = "1.29.1", features = ["full"] }
+clap = { version = "4.0", features = ["derive"] }

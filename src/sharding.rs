@@ -1,10 +1,11 @@
 use std::sync::mpsc::SendError;
-use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::Receiver;
 
+
 pub struct ShardedChannel<T> {
-  tx: Vec<Sender<T>>,
+  tx: Vec<SyncSender<T>>,
 }
 
 impl<T> ShardedChannel<T> {
@@ -13,7 +14,7 @@ impl<T> ShardedChannel<T> {
   {
     let mut transmitters = Vec::new();
     for _ in 0..count {
-      let (tx, rx) = channel();
+      let (tx, rx) = sync_channel(32);
       transmitters.push(tx);
       receiver(rx);
     }
@@ -29,7 +30,7 @@ impl<T> ShardedChannel<T> {
 
 impl<T> Clone for ShardedChannel<T> {
     fn clone(&self) -> ShardedChannel<T> {
-      let transmitters: Vec<Sender<T>> = self.tx.iter().map(|s| {
+      let transmitters: Vec<SyncSender<T>> = self.tx.iter().map(|s| {
         s.clone()
       }).collect();
       ShardedChannel {

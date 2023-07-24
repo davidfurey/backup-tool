@@ -56,6 +56,7 @@ fn create_hash_worker(
                 }
                 Some(FileType::SYMLINK) => {
                     destination = Some(std::fs::read_link(dir_entry.path()).unwrap().to_string_lossy().to_string());
+                    println!("Symbolic link from {:?} to {:?}", dir_entry.path().to_string_lossy().to_string(), destination);
                 }
                 _ => {}
             }

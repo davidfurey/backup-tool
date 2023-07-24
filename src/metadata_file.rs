@@ -11,10 +11,14 @@ use crate::datastore;
 use datastore::DataStore;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
+use crate::encryption;
+extern crate sequoia_openpgp as openpgp;
+use openpgp::Cert;
+use openpgp::parse::Parse;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FileData {
-    data: Vec<FileMetadata>,
+    pub data: Vec<FileMetadata>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -27,7 +31,7 @@ pub struct FileMetadata {
     pub data_hash: Option<String>,
 }
 
-pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, stores: Arc<Vec<DataStore>>) {
+pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, stores: Arc<Vec<DataStore>>, key_file: &PathBuf) {
   let mut vec = Vec::new();
 
   while let Ok(msg) = metadata_rx.recv() {
@@ -48,15 +52,21 @@ pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, 
 
   let name = format!("backup-{}-{}.metadata", datetime, random_suffix);
 
-  let filename = path.join(name);
+  let filename = path.join(&name);
 
-  let destination = File::create(&filename).unwrap();
+  print!("Filename: {:?}", filename);
+  let mut destination = File::create(&filename).unwrap();
 
-  //todo: should be encrypted (and signed?)
-  data.serialize(&mut Serializer::new(destination)).unwrap();
+  //todo: should be encrypted [done] (and signed?)
+  let key = Cert::from_file(key_file).unwrap();
+  let policy = openpgp::policy::StandardPolicy::new();
+  let mut enc = encryption::encryptor(&policy, &mut destination, &key).unwrap();
+  data.serialize(&mut Serializer::new(&mut enc)).unwrap();
+  enc.finalize().unwrap();
 
   for store in stores.iter() {
+    let x = futures::executor::block_on(store.metadata_bucket());
     let metadata_file = std::fs::File::open(&filename).unwrap();
-    store.metadata_bucket().upload("foo", metadata_file).unwrap();
+    futures::executor::block_on(x.upload(&name, metadata_file)).unwrap(); // todo
   }
 }
