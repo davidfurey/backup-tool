@@ -45,13 +45,14 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    console_subscriber::init();
     let cli = Cli::parse();
     let content = std::fs::read_to_string("backup.toml").unwrap();
     let config: BackupConfig = toml::from_str(&content).unwrap();
 
     match &cli.command {
         Commands::Backup {} => {
-            backup::run_backup(config)
+            backup::run_backup(config).await
         }
         Commands::Restore { name } => {
             restore::restore_backup(

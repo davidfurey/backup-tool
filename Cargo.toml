@@ -29,5 +29,8 @@ futures-core = "0.3"
 futures = "^0.3"
 reqwest = { version = "^0.11", default-features = false, features = ["gzip", "json", "stream"] }
 tokio-util = { version = "0.7.8", features = ["io"] }
-tokio = { version = "1.29.1", features = ["full"] }
+tokio = { version = "1.29.1", features = ["full", "tracing"] }
+tokio-stream = { version = "0.1.14" }
+tokio-scoped = { version = "0.2.0" } # required by upload_worker
+console-subscriber = { version = "0.1.10" } # added to debug concurrency issue (backup hanging on DataStore init await)
 clap = { version = "4.0", features = ["derive"] }

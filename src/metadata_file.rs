@@ -15,6 +15,7 @@ use crate::encryption;
 extern crate sequoia_openpgp as openpgp;
 use openpgp::Cert;
 use openpgp::parse::Parse;
+use futures::StreamExt;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FileData {
@@ -31,13 +32,19 @@ pub struct FileMetadata {
     pub data_hash: Option<String>,
 }
 
-pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, stores: Arc<Vec<DataStore>>, key_file: &PathBuf) {
+// async fn join_all_discard<I, F>(iter: I) -> ()
+// where
+//     I: IntoIterator<Item = F>,
+//     F: Future<Output = ()>
+
+pub async fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, stores: Vec<DataStore>, key: &Cert) {
   let mut vec = Vec::new();
 
   while let Ok(msg) = metadata_rx.recv() {
       vec.push(msg);
   }
 
+  println!("Metadata rx finished");
   let data = FileData {
       data: vec,
   };
@@ -58,15 +65,22 @@ pub fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetadata>, 
   let mut destination = File::create(&filename).unwrap();
 
   //todo: should be encrypted [done] (and signed?)
-  let key = Cert::from_file(key_file).unwrap();
   let policy = openpgp::policy::StandardPolicy::new();
   let mut enc = encryption::encryptor(&policy, &mut destination, &key).unwrap();
   data.serialize(&mut Serializer::new(&mut enc)).unwrap();
   enc.finalize().unwrap();
 
-  for store in stores.iter() {
-    let x = futures::executor::block_on(store.metadata_bucket());
-    let metadata_file = std::fs::File::open(&filename).unwrap();
-    futures::executor::block_on(x.upload(&name, metadata_file)).unwrap(); // todo
-  }
+  // let foobar = futures::stream::iter(stores.iter()).map(|store| async {
+  //   let x = store.metadata_bucket().await;
+  //   let metadata_file = std::fs::File::open(&filename).unwrap();
+  //   x.upload(&name, metadata_file).await.unwrap(); // todo
+  // }).buffer_unordered(4).count();
+  
+  // fn require_send(_: impl Send) {}
+  // require_send(foobar);
+  let x = stores.get(0).unwrap().metadata_bucket().await;
+  let metadata_file = std::fs::File::open(&filename).unwrap();
+  x.upload(&name, metadata_file).await.unwrap(); // todo
+  //foobar.await;
+  println!("Metadata written");
 }

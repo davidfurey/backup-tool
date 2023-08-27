@@ -4,7 +4,7 @@ use std::io::{self, Write, Read};
 extern crate sequoia_openpgp as openpgp;
 
 use openpgp::crypto::SessionKey;
-use openpgp::types::SymmetricAlgorithm;
+use openpgp::types::{SymmetricAlgorithm, CompressionAlgorithm};
 use openpgp::serialize::stream::*;
 use openpgp::parse::stream::*;
 use openpgp::policy::Policy;
@@ -63,6 +63,7 @@ fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send
         .build()?;
 
     let message = Compressor::new(message)
+      .algo(CompressionAlgorithm::Uncompressed) // todo: 13.5 seconds down to under 8 seconds ?? is it worth it
       .build()?;
 
     // Emit a literal data packet.

@@ -21,6 +21,17 @@ impl<T> ShardedChannel<T> {
     return ShardedChannel { tx: transmitters }
   }
 
+  pub fn new_vec(count: u32) -> (Vec<Receiver<T>>, ShardedChannel<T>) {
+    let mut transmitters = Vec::new();
+    let mut receivers = Vec::new();
+    for _ in 0..count {
+      let (tx, rx) = sync_channel(32);
+      transmitters.push(tx);
+      receivers.push(rx);
+    }
+    return (receivers, ShardedChannel { tx: transmitters })
+  }
+
   pub fn send(&self, value: T, hash: &str) -> Result<(), SendError<T>> {
     let x = hash.chars().next().unwrap();
     let index = (x as usize) % self.tx.len();
