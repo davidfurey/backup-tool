@@ -70,6 +70,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
       FileType::SYMLINK => {
         println!("Creating symlink {:?} -> {:?}", &path, entry.destination);
         symlink(entry.destination.clone().unwrap(), &path).unwrap();
+        // todo?
         //let permissions = PermissionsExt::from_mode(entry.mode);
         //set_permissions(&path, permissions).unwrap();
         1
