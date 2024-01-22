@@ -86,13 +86,21 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
 }
 
 pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf) {
+
+  if destination.exists() {
+    println!("Bailing because destination already exists");
+    return;
+  }
+
+  create_dir_all(destination.join(".data")).unwrap();
+
   let metadata_bucket = store.metadata_bucket().await;
   let data_bucket = store.init().await;
   let destination_filename = destination.join(".data/metadata.gpg");
   let data_cache = destination.join(".data");
   println!("creating {:?}", destination_filename);
   let encrypted_file = File::create(&destination_filename).unwrap();
-  metadata_bucket.download(backup.as_str(), encrypted_file).await.unwrap();
+  metadata_bucket.download(format!("{backup}.metadata").as_str(), encrypted_file).await.unwrap();
   
   let mut encrypted_file_read = File::open(&destination_filename).unwrap();
   let key = Cert::from_file(key_file).unwrap();
