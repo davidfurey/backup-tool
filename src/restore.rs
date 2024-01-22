@@ -11,7 +11,7 @@ use crate::metadata_file::{self, FileMetadata};
 use metadata_file::FileData;
 use crate::decryption;
 use decryption::Decryption;
-use std::fs::{File, set_permissions, create_dir_all};
+use std::fs::{File, set_permissions, create_dir_all, remove_dir_all};
 use std::os::unix::fs::symlink;
 use crate::filetype;
 use filetype::FileType;
@@ -93,7 +93,9 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     return;
   }
 
-  create_dir_all(destination.join(".data")).unwrap();
+  // todo: should we make this filename less likely to be something that might be included in an actual backup? Random perhaps?
+  let temporary_data_dir = destination.join(".data");
+  create_dir_all(&temporary_data_dir).unwrap();
 
   let metadata_bucket = store.metadata_bucket().await;
   let data_bucket = store.init().await;
@@ -118,4 +120,5 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     .buffer_unordered(4)
     .count()
     .await;
+  remove_dir_all(&temporary_data_dir).unwrap();
 }
