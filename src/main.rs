@@ -36,7 +36,8 @@ enum Commands {
     Backup {
     },
     Restore {
-        name: String
+        name: String,
+        destination: String
     },
     List {},
     Validate {},
@@ -54,9 +55,9 @@ async fn main() {
         Commands::Backup {} => {
             backup::run_backup(config).await
         }
-        Commands::Restore { name } => {
+        Commands::Restore { name, destination } => {
             restore::restore_backup(
-                PathBuf::from("/tmp/restore"),
+                PathBuf::from(destination),
                 name, 
                 config.stores.get(0).unwrap(),
                 config.key_file
