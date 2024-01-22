@@ -71,14 +71,13 @@ pub async fn run_backup(config: BackupConfig) {
   };
 
   let b = {
-    let key = Cert::from_file(config.key_file.clone()).unwrap();
     tokio::task::spawn(async move {
-      create_uploader(upload_channel, buckets, &config.data_cache, &key).await
+      create_uploader(upload_channel, buckets).await
     })
   };
 
-  a.await;
-  b.await;
+  a.await.unwrap();
+  b.await.unwrap();
 
   Cache::cleanup();
 }

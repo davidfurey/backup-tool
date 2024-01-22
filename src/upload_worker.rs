@@ -31,30 +31,17 @@ pub fn create_encryption_workers(
 }
 
 pub async fn create_uploader(
-    upload_rx: tokio::sync::mpsc::Receiver<UploadRequest>, 
-    buckets: Vec<(DataStore, Bucket, Bucket)>, 
-    data_cache: &PathBuf, 
-    key: &Cert, 
+    upload_rx: tokio::sync::mpsc::Receiver<UploadRequest>,
+    buckets: Vec<(DataStore, Bucket, Bucket)>
 ) {
-    let data_cache = data_cache.clone();
-    let key = key.clone();
-    let data_cache = data_cache.clone();   
     let c = ReceiverStream::new(upload_rx).map(|request| async {
-        upload_multiple(request, &data_cache, &buckets, &key).await
+        upload(request, &buckets).await
     }).buffer_unordered(64).count().await;
-    println!("Done with uploads (uploader): {:?}", c);
+    println!("Uploaded {:?} files", c);
 }
 
-async fn upload_multiple(request: UploadRequest, data_cache: &PathBuf, buckets: &Vec<(DataStore, Bucket, Bucket)>, key: &Cert) {
+async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>) {
     print!("Uploading {:?} ({:?})\n", request.filename, request.data_hash);
-    // let destination_filename = data_cache.join(&request.data_hash);
-    // {
-    //     let mut source = fs::File::open(request.filename).unwrap();
-    //     print!("Creating {:?}\n", destination_filename);
-    //     let mut dest = File::create(&destination_filename).unwrap();
-    //     encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
-    // }
-
     for (store, bucket, _) in buckets.iter() {
         let encrypted_file = fs::File::open(&request.filename).unwrap();
         let key = format!("{}{}", store.data_prefix, request.data_hash);
@@ -67,7 +54,6 @@ async fn upload_multiple(request: UploadRequest, data_cache: &PathBuf, buckets: 
             }
         }
     }
-    println!("Uploaded");
 }
 
 fn create_encryption_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Vec<DataStore>, uploader: tokio::sync::mpsc::Sender<UploadRequest>, data_cache: &PathBuf, key: &Cert) {
@@ -88,11 +74,12 @@ fn create_encryption_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>,
                 let mut dest = File::create(&destination_filename).unwrap();
                 encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
             }
-
-            uploader.blocking_send(UploadRequest { filename: destination_filename, data_hash: request.data_hash }).unwrap()
-            // todo, set in_cold_storage if upload is successful
+            let data_hash = request.data_hash.clone();
+            uploader.blocking_send(UploadRequest { filename: destination_filename, data_hash: request.data_hash }).unwrap();
+            // todo (inprogress), set in_cold_storage if upload is successful: need to sort out md5_hash
+            // also need to check that upload was actually successful
+            cache.set_data_in_cold_storage(data_hash.as_str(), "md5_hash", &stores).unwrap();
         }
     }
-    print!("Done with uploads\n");
   });
 }

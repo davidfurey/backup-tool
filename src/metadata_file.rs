@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::fs::File;
 use serde::Serialize;
@@ -14,8 +13,6 @@ use rand::{distributions::Alphanumeric, Rng};
 use crate::encryption;
 extern crate sequoia_openpgp as openpgp;
 use openpgp::Cert;
-use openpgp::parse::Parse;
-use futures::StreamExt;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FileData {

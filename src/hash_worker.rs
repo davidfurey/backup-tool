@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::thread;
 use std::os::unix::prelude::MetadataExt;
 use crate::{metadata_file, upload_worker, sharding, datastore, sqlite_cache, filetype};
@@ -74,6 +73,5 @@ fn create_hash_worker(
                 }).unwrap();
             });
         }
-        print!("Done with hashing\n");
     });
 }

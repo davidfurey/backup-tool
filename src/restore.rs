@@ -2,7 +2,6 @@ use std::os::unix::prelude::PermissionsExt;
 use std::path::{PathBuf, Path};
 
 use futures::{StreamExt, FutureExt};
-use futures::stream::FuturesOrdered;
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use crate::datastore;
