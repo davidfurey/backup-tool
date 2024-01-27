@@ -18,7 +18,7 @@ pub fn create_hash_workers(
     hmac_secret: String,
     m: &MultiProgress
 ) {
-    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} Hashing: {wide_msg}")
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
         .unwrap()
         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
     let mut i = 0;
@@ -50,7 +50,7 @@ fn create_hash_worker(
 
         while let Ok(dir_entry) = hash_rx.recv() {
             pb.inc(1);
-            pb.set_message(format!("{:?}", dir_entry.file_name()));
+            pb.set_message(format!("{}", dir_entry.file_name().to_string_lossy()));
             let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
             let mut destination: Option<String> = None;
             let mut data_hash: Option<String> = None;

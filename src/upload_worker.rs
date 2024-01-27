@@ -66,7 +66,7 @@ pub async fn create_uploader(
     let cache = AsyncCache::new().await;
     let c = ReceiverStream::new(upload_rx).map(|request| async {
         pb.inc(1);
-        pb.set_message(format!("Uploading {}", request.data_hash));
+        pb.set_message(format!("{}", request.data_hash));
         let report = upload(request, &buckets).await;
         cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
         remove_file(report.filename).unwrap();
@@ -110,10 +110,10 @@ fn create_encryption_worker(
         let destination_filename = data_cache.join(&request.data_hash);
         pb.inc(1);
         if destination_filename.exists() || cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
-            pb.set_message(format!("{:?} [Skipped]", &request.filename));
+            pb.set_message(format!("{} [Skipped]", &request.filename.to_string_lossy()));
             trace!("Skipping {:?} ({:?} already uploaded or in progress)\n", &request.filename, request.data_hash);
         } else {
-            pb.set_message(format!("{:?}", &request.filename));
+            pb.set_message(format!("{}", &request.filename.to_string_lossy()));
             trace!("Processing {:?}\n", &request.filename);
             {
                 let mut source = fs::File::open(request.filename).unwrap();
