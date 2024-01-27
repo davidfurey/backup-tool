@@ -2,6 +2,7 @@ use std::os::unix::prelude::PermissionsExt;
 use std::path::{PathBuf, Path};
 
 use futures::{StreamExt, FutureExt};
+use log::{trace, error};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use crate::datastore;
@@ -21,17 +22,17 @@ use filetime::{set_file_mtime, FileTime};
 async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf) {
   // todo: avoid repeating downloads
   let destination_filename = cache.join(format!("{}.gpg", data_hash));
-  println!("attempting to create {:?}", destination_filename);
+  trace!("attempting to create {:?}", destination_filename);
   let encrypted_file = File::create(&destination_filename).unwrap();
   let key = format!("{}{}", data_prefix, data_hash);
-  println!("downloading {:?}", destination_filename);
+  trace!("downloading {:?}", destination_filename);
 
   bucket.download(key.as_str(), encrypted_file).await.unwrap();
-  println!("downloaded {:?}", destination_filename);
+  trace!("downloaded {:?}", destination_filename);
   let mut source = File::open(&destination_filename).unwrap();
   let mut dest = File::create(&destination).unwrap();
   decryption::decrypt_file(&mut source, &mut dest, cert).unwrap();
-  println!("decrypted {:?}", destination);
+  trace!("decrypted {:?}", destination);
 }
 
 pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert) -> i64 {
@@ -39,13 +40,13 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
   let suffix = canonical_name.strip_prefix("/").unwrap();
   let path = destination.join(suffix);
   if !path.starts_with(&destination) { //canonicalize() ???
-    println!("ignoring file that is attempting to breach restore path"); // this might require more thought since we allow symlinks
+    trace!("ignoring file that is attempting to breach restore path"); // this might require more thought since we allow symlinks
     //continue;
     0
   } else {
     match entry.ttype {
       FileType::FILE => {
-        println!("Creating file {:?}", &path);
+        trace!("Creating file {:?}", &path);
         let data_hash = match &entry.data_hash {
             Some(val) => val.as_str(), 
             None => "",
@@ -68,7 +69,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         1
       }
       FileType::SYMLINK => {
-        println!("Creating symlink {:?} -> {:?}", &path, entry.destination);
+        trace!("Creating symlink {:?} -> {:?}", &path, entry.destination);
         symlink(entry.destination.clone().unwrap(), &path).unwrap();
         // todo?
         //let permissions = PermissionsExt::from_mode(entry.mode);
@@ -76,7 +77,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         1
       }
       FileType::DIRECTORY => {
-        println!("Creating dir {:?}", &path);
+        trace!("Creating dir {:?}", &path);
         create_dir_all(path.as_path()).unwrap();
         let permissions = PermissionsExt::from_mode(entry.mode);
         set_permissions(&path, permissions).unwrap();
@@ -89,7 +90,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
 pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf) {
 
   if destination.exists() {
-    println!("Bailing because destination already exists");
+    error!("Bailing because destination already exists");
     return;
   }
 
@@ -101,7 +102,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   let data_bucket = store.init().await;
   let destination_filename = destination.join(".data/metadata.gpg");
   let data_cache = destination.join(".data");
-  println!("creating {:?}", destination_filename);
+  trace!("creating {:?}", destination_filename);
   let encrypted_file = File::create(&destination_filename).unwrap();
   metadata_bucket.download(format!("{backup}.metadata").as_str(), encrypted_file).await.unwrap();
   
@@ -112,7 +113,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   let mut decryptor = decrypted;
   let metadata: FileData = rmps::from_read(&mut decryptor).unwrap();
 
-  println!("Destination: {:?}", destination.as_path());
+  trace!("Destination: {:?}", destination.as_path());
   futures::stream::iter(metadata.data.iter())
     .map(|entry| async {
       process_file(entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key).await

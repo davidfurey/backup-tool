@@ -4,6 +4,8 @@ use std::fs::File;
 use std::thread;
 use std::fs::remove_file;
 
+use log::error;
+use log::trace;
 use sequoia_openpgp::Cert;
 
 use crate::{datastore, swift, sqlite_cache, encryption};
@@ -48,11 +50,11 @@ pub async fn create_uploader(
         cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
         remove_file(report.filename).unwrap();
     }).buffer_unordered(64).count().await;
-    println!("HERE:Uploaded {:?} files", c);
+    trace!("Uploaded {:?} files", c);
 }
 
 async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>) -> UploadReport {
-    print!("Uploading {:?}\n", request.data_hash);
+    trace!("Uploading {:?}\n", request.data_hash);
     let mut success_ids: Vec<i32> = Vec::new();
     for (store, bucket, _) in buckets.iter() {
         let encrypted_file = fs::File::open(&request.filename).unwrap();
@@ -62,7 +64,7 @@ async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket
                 success_ids.push(store.id);
             },
             _ => {
-                print!("Failed to upload {:?} to {:?}\n", request.data_hash, store.id)
+                error!("Failed to upload {:?} to {:?}\n", request.data_hash, store.id)
             }
         }
     }
@@ -79,12 +81,12 @@ fn create_encryption_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>,
     while let Ok(request) = upload_rx.recv() {
         let destination_filename = data_cache.join(&request.data_hash);
         if destination_filename.exists() || cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
-            print!("Skipping {:?} ({:?} already uploaded or in progress)\n", &request.filename, request.data_hash);
+            trace!("Skipping {:?} ({:?} already uploaded or in progress)\n", &request.filename, request.data_hash);
         } else {
-            print!("Processing {:?}\n", &request.filename);
+            trace!("Processing {:?}\n", &request.filename);
             {
                 let mut source = fs::File::open(request.filename).unwrap();
-                print!("Creating {:?}\n", destination_filename);
+                trace!("Creating {:?}\n", destination_filename);
                 let mut dest = File::create(&destination_filename).unwrap();
                 encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
             }

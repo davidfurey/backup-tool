@@ -1,4 +1,5 @@
 use crate::swift;
+use log::trace;
 use swift::Bucket;
 
 #[derive(Deserialize)]
@@ -24,7 +25,7 @@ impl Clone for DataStore {
 
 impl DataStore {
   pub async fn init(&self) -> Bucket {
-    println!("datastore::init");
+    trace!("datastore::init");
     let session = osauth::Session::from_env()
       .await
       .expect("Failed to create an identity provider from the environment");

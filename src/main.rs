@@ -46,6 +46,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     console_subscriber::init();
     let cli = Cli::parse();
     let content = std::fs::read_to_string("backup.toml").unwrap();

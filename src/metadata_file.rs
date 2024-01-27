@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::fs::File;
+use log::trace;
 use serde::Serialize;
 extern crate rmp_serde as rmps;
 use rmps::Serializer;
@@ -41,7 +42,7 @@ pub async fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetad
       vec.push(msg);
   }
 
-  println!("Metadata rx finished");
+  trace!("Metadata rx finished");
   let data = FileData {
       data: vec,
   };
@@ -58,7 +59,7 @@ pub async fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetad
 
   let filename = path.join(&name);
 
-  print!("Filename: {:?}", filename);
+  trace!("Filename: {:?}", filename);
   let mut destination = File::create(&filename).unwrap();
 
   //todo: should be encrypted [done] (and signed?)
@@ -79,5 +80,5 @@ pub async fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetad
   let metadata_file = std::fs::File::open(&filename).unwrap();
   x.upload(&name, metadata_file).await.unwrap(); // todo
   //foobar.await;
-  println!("Metadata written");
+  trace!("Metadata written");
 }

@@ -2,6 +2,7 @@ use std::thread;
 use std::os::unix::prelude::MetadataExt;
 use crate::{metadata_file, upload_worker, sharding, datastore, sqlite_cache, filetype};
 use datastore::DataStore;
+use log::trace;
 use sharding::ShardedChannel;
 use sqlite_cache::Cache;
 use filetype::FileType;
@@ -45,19 +46,19 @@ fn create_hash_worker(
                     let d_hash = cache.get_hash(dir_entry.path(), &metadata, hmac_secret.as_str()).unwrap();
 
                     if !cache.is_data_in_cold_storage(&d_hash, &stores).unwrap() {
-                        print!("Sending {:?} to upload queue\n", dir_entry.file_name());
+                        trace!("Sending {:?} to upload queue\n", dir_entry.file_name());
                         upload_tx.send(UploadRequest {
                             filename: dir_entry.path().to_path_buf(),  
                             data_hash: d_hash.clone(),
                         }, d_hash.as_str()).unwrap();
                     } else {
-                        print!("Skipping {:?} ({:?} already uploaded)\n", dir_entry.file_name(), d_hash);
+                        trace!("Skipping {:?} ({:?} already uploaded)\n", dir_entry.file_name(), d_hash);
                     }
                     data_hash = Some(d_hash);
                 }
                 Some(FileType::SYMLINK) => {
                     destination = Some(std::fs::read_link(dir_entry.path()).unwrap().to_string_lossy().to_string());
-                    println!("Symbolic link from {:?} to {:?}", dir_entry.path().to_string_lossy().to_string(), destination);
+                    trace!("Symbolic link from {:?} to {:?}", dir_entry.path().to_string_lossy().to_string(), destination);
                 }
                 _ => {}
             }

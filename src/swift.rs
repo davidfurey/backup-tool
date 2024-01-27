@@ -1,4 +1,5 @@
 use std::fs::File;
+use log::error;
 use osauth::Session;
 use osauth::services::OBJECT_STORAGE;
 use futures::stream::StreamExt;
@@ -43,7 +44,7 @@ impl Bucket {
         .bytes_stream()
         .map(|result| {
             result.map_err(|_error| {
-                println!("Encountered error");
+                error!("Encountered error");
                 std::io::Error::new(std::io::ErrorKind::Other, "Error!")
               }
             )
