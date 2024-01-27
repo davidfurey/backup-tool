@@ -1,6 +1,7 @@
 use std::thread;
 use std::sync::mpsc::channel;
 
+use indicatif::MultiProgress;
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use walkdir::WalkDir;
@@ -32,6 +33,7 @@ pub async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, 
 pub async fn run_backup(config: BackupConfig) {
   Cache::init();
 
+  let m = MultiProgress::new();
 // Directory listing (thread) -> hash channel -> hash worker {-> encryption (sharded) channel -> uploader stream
 //                                                           {-> metadata channel
   let (metadata_tx, metadata_rx) = channel();
@@ -53,12 +55,12 @@ pub async fn run_backup(config: BackupConfig) {
   {
     let key = Cert::from_file(config.key_file.clone()).unwrap();
     let stores = config.stores.to_vec();
-    create_encryption_workers(stores, &config.data_cache, &key, encryption_rx, upload_tx);
+    create_encryption_workers(stores, &config.data_cache, &key, encryption_rx, upload_tx, &m);
   }
 
   {
     let stores = config.stores.to_vec();
-    create_hash_workers(hash_rx, metadata_tx, encryption_channel, stores, config.hmac_secret);
+    create_hash_workers(hash_rx, metadata_tx, encryption_channel, stores, config.hmac_secret, &m);
   }
     
   let a = {

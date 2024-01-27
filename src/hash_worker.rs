@@ -2,6 +2,7 @@ use std::thread;
 use std::os::unix::prelude::MetadataExt;
 use crate::{metadata_file, upload_worker, sharding, datastore, sqlite_cache, filetype};
 use datastore::DataStore;
+use indicatif::{MultiProgress, ProgressStyle, ProgressBar};
 use log::trace;
 use sharding::ShardedChannel;
 use sqlite_cache::Cache;
@@ -15,9 +16,19 @@ pub fn create_hash_workers(
     upload_tx: ShardedChannel<UploadRequest>,
     stores:  Vec<DataStore>,
     hmac_secret: String,
+    m: &MultiProgress
 ) {
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} Hashing: {wide_msg}")
+        .unwrap()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let mut i = 0;
+    let length = 4;
     for _n in 0..4 {
-        create_hash_worker(&hash_rx, &metadata_tx, &upload_tx, &stores, hmac_secret.clone());
+        let pb = m.add(ProgressBar::new_spinner());
+        pb.set_style(spinner_style.clone());
+        pb.set_prefix(format!("[{}/{}]", i + 1, length));
+        i = i + 1;
+        create_hash_worker(&hash_rx, &metadata_tx, &upload_tx, &stores, hmac_secret.clone(), pb);
      } 
 }
 
@@ -27,6 +38,7 @@ fn create_hash_worker(
     upload_tx: &ShardedChannel<UploadRequest>,
     stores: &Vec<DataStore>,
     hmac_secret: String,
+    pb: ProgressBar
 ) {
     let hash_rx = hash_rx.clone();
     let metadata_tx = metadata_tx.clone();
@@ -37,6 +49,8 @@ fn create_hash_worker(
         let cache = Cache::new();
 
         while let Ok(dir_entry) = hash_rx.recv() {
+            pb.inc(1);
+            pb.set_message(format!("{:?}", dir_entry.file_name()));
             let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
             let mut destination: Option<String> = None;
             let mut data_hash: Option<String> = None;

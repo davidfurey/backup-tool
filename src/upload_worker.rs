@@ -34,9 +34,9 @@ pub fn create_encryption_workers(
     data_cache: &PathBuf,
     key: &Cert,
     encryption_rx: Vec<std::sync::mpsc::Receiver<UploadRequest>>,
-    upload_tx: tokio::sync::mpsc::Sender<UploadRequest>
+    upload_tx: tokio::sync::mpsc::Sender<UploadRequest>,
+    m: &MultiProgress
 ) {
-  let m = MultiProgress::new();
   let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} Encrypting: {wide_msg}")
     .unwrap()
     .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
