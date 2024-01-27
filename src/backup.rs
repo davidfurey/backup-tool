@@ -74,7 +74,7 @@ pub async fn run_backup(config: BackupConfig) {
 
   let b = {
     tokio::task::spawn(async move {
-      create_uploader(upload_channel, buckets).await
+      create_uploader(upload_channel, buckets, &m).await
     })
   };
 

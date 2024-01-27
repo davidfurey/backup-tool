@@ -37,7 +37,7 @@ pub fn create_encryption_workers(
     upload_tx: tokio::sync::mpsc::Sender<UploadRequest>,
     m: &MultiProgress
 ) {
-  let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} Encrypting: {wide_msg}")
+  let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
     .unwrap()
     .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
   let mut i = 0;
@@ -45,7 +45,7 @@ pub fn create_encryption_workers(
   for r in encryption_rx {
     let pb = m.add(ProgressBar::new_spinner());
     pb.set_style(spinner_style.clone());
-    pb.set_prefix(format!("[{}/{}]", i + 1, length));
+    pb.set_prefix(format!("[Encryptor {}/{}]", i + 1, length));
     i = i + 1;
     create_encryption_worker(r, stores.clone(), upload_tx.clone(), &data_cache, &key, pb);
   }
@@ -53,10 +53,20 @@ pub fn create_encryption_workers(
 
 pub async fn create_uploader(
     upload_rx: tokio::sync::mpsc::Receiver<UploadRequest>,
-    buckets: Vec<(DataStore, Bucket, Bucket)>
+    buckets: Vec<(DataStore, Bucket, Bucket)>,
+    m: &MultiProgress
 ) {
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} Uploading: {wide_msg}")
+        .unwrap()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let pb = m.add(ProgressBar::new_spinner());
+        pb.set_style(spinner_style.clone());
+        pb.set_prefix(format!("[Uploader]"));
+
     let cache = AsyncCache::new().await;
     let c = ReceiverStream::new(upload_rx).map(|request| async {
+        pb.inc(1);
+        pb.set_message(format!("Uploading {}", request.data_hash));
         let report = upload(request, &buckets).await;
         cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
         remove_file(report.filename).unwrap();
@@ -65,7 +75,7 @@ pub async fn create_uploader(
 }
 
 async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>) -> UploadReport {
-    trace!("Uploading {:?}\n", request.data_hash);
+    trace!("{:?}\n", request.data_hash);
     let mut success_ids: Vec<i32> = Vec::new();
     for (store, bucket, _) in buckets.iter() {
         let encrypted_file = fs::File::open(&request.filename).unwrap();
