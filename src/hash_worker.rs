@@ -26,7 +26,7 @@ pub fn create_hash_workers(
     for _n in 0..4 {
         let pb = m.add(ProgressBar::new_spinner());
         pb.set_style(spinner_style.clone());
-        pb.set_prefix(format!("[{}/{}]", i + 1, length));
+        pb.set_prefix(format!("[Hasher {}/{}]", i + 1, length));
         i = i + 1;
         create_hash_worker(&hash_rx, &metadata_tx, &upload_tx, &stores, hmac_secret.clone(), pb);
      } 
