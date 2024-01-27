@@ -15,6 +15,7 @@ use sqlite_cache::Cache;
 use sqlite_cache::AsyncCache;
 use tokio_stream::wrappers::ReceiverStream;
 use futures::StreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 #[derive(Debug)]
 pub struct UploadRequest {
@@ -35,8 +36,18 @@ pub fn create_encryption_workers(
     encryption_rx: Vec<std::sync::mpsc::Receiver<UploadRequest>>,
     upload_tx: tokio::sync::mpsc::Sender<UploadRequest>
 ) {
+  let m = MultiProgress::new();
+  let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} Encrypting: {wide_msg}")
+    .unwrap()
+    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+  let mut i = 0;
+  let length = encryption_rx.len();
   for r in encryption_rx {
-    create_encryption_worker(r, stores.clone(), upload_tx.clone(), &data_cache, &key);
+    let pb = m.add(ProgressBar::new_spinner());
+    pb.set_style(spinner_style.clone());
+    pb.set_prefix(format!("[{}/{}]", i + 1, length));
+    i = i + 1;
+    create_encryption_worker(r, stores.clone(), upload_tx.clone(), &data_cache, &key, pb);
   }
 }
 
@@ -71,7 +82,14 @@ async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket
     UploadReport { filename: request.filename, data_hash: request.data_hash, store_ids: success_ids }
 }
 
-fn create_encryption_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>, stores: Vec<DataStore>, uploader: tokio::sync::mpsc::Sender<UploadRequest>, data_cache: &PathBuf, key: &Cert) {
+fn create_encryption_worker(
+    upload_rx: std::sync::mpsc::Receiver<UploadRequest>,
+    stores: Vec<DataStore>,
+    uploader: tokio::sync::mpsc::Sender<UploadRequest>,
+    data_cache: &PathBuf,
+    key: &Cert,
+    pb: ProgressBar
+) {
   let cache = Cache::new();
 
   let data_cache = data_cache.clone();
@@ -80,9 +98,12 @@ fn create_encryption_worker(upload_rx: std::sync::mpsc::Receiver<UploadRequest>,
   thread::spawn(move || {
     while let Ok(request) = upload_rx.recv() {
         let destination_filename = data_cache.join(&request.data_hash);
+        pb.inc(1);
         if destination_filename.exists() || cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
+            pb.set_message(format!("{:?} [Skipped]", &request.filename));
             trace!("Skipping {:?} ({:?} already uploaded or in progress)\n", &request.filename, request.data_hash);
         } else {
+            pb.set_message(format!("{:?}", &request.filename));
             trace!("Processing {:?}\n", &request.filename);
             {
                 let mut source = fs::File::open(request.filename).unwrap();
