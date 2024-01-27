@@ -7,7 +7,8 @@ edition = "2021"
 
 [dependencies]
 filetime = "0.2"
-rusqlite = "0.27.0"
+rusqlite = "0.30.0"
+sqlx = { version = "0.7.3", features = [ "sqlite", "runtime-tokio" ] }
 sha2 = "0.10.7"
 sha1collisiondetection = "0.2.7" # should be got from sequoia-openpgp but we need to pull in a newer version to avoid pointer error (https://gitlab.com/sequoia-pgp/sha1collisiondetection/-/commit/4cd6e3fec53388804054066e3d911782a53f4960)
 sequoia-openpgp = "1.16.0"

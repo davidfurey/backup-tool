@@ -7,9 +7,38 @@ use crate::hash;
 use std::os::unix::prelude::MetadataExt;
 use rusqlite::{Connection, Result, Error};
 use datastore::DataStore;
+use sqlx::Executor;
+use sqlx::SqlitePool;
+use sqlx;
 
 pub struct Cache {
-  connection: Connection,
+  connection: Connection
+}
+
+pub struct AsyncCache {
+  pool: SqlitePool
+}
+// ideally we would replace Cache with AsyncCache
+impl AsyncCache {
+  pub async fn new<'b>() -> AsyncCache {
+    AsyncCache {
+      pool: SqlitePool::connect("cache.db").await.unwrap()
+    }
+  }
+
+  pub async fn set_data_in_cold_storage(&self, hash: &str, md5_hash: &str, store_ids: &Vec<i32>) -> Result<usize, String> {
+    for store_id in store_ids {
+      let query =
+        sqlx::query("INSERT INTO uploaded_objects VALUES ($1, $2, $3)")
+          .bind(hash)
+          .bind(md5_hash)
+          .bind(store_id);
+      if self.pool.execute(query).await.unwrap().rows_affected() != 1 {
+        return Err("Query failed".to_string())
+      }
+    }
+    return Ok(1);
+  }
 }
 
 impl Cache {
@@ -72,17 +101,9 @@ impl Cache {
     return Ok(true);
   }
   
-  pub fn set_data_in_cold_storage(&self, hash: &str, md5_hash: &str, stores: &Vec<DataStore>) -> Result<usize, rusqlite::Error> {
-    let mut stmt = self.connection.prepare("INSERT INTO uploaded_objects VALUES (?, ?, ?)").unwrap();
-    for store in stores {
-      stmt.execute([hash, md5_hash, store.id.to_string().as_str()]).unwrap();
-    }
-    return Ok(1);
-  }
-  
-  
   fn set_data_hash(&self, metadata_hash: &str, data_hash: &str) -> Result<usize, rusqlite::Error> {
     let mut stmt = self.connection.prepare("UPDATE fs_hash_cache set data_hash = ? where fs_hash = ?").unwrap();
     return stmt.execute([data_hash, metadata_hash]);
   }  
+  
 }
