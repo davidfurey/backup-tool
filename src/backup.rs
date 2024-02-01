@@ -1,16 +1,17 @@
 use std::thread;
 use std::sync::mpsc::channel;
 
+//use futures::StreamExt;
 use indicatif::MultiProgress;
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use walkdir::WalkDir;
 
 use crate::datastore::DataStore;
+use crate::sqlite_cache::AsyncCache;
 use crate::swift::Bucket;
-use crate::{config, sqlite_cache, upload_worker, hash_worker, metadata_file, sharding};
+use crate::{config, upload_worker, hash_worker, metadata_file, sharding};
 use config::BackupConfig;
-use sqlite_cache::Cache;
 use upload_worker::create_encryption_workers;
 use upload_worker::create_uploader;
 use hash_worker::create_hash_workers;
@@ -31,26 +32,56 @@ pub async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, 
 
 
 pub async fn run_backup(config: BackupConfig) {
-  Cache::init();
+
+  let cache = AsyncCache::new().await;
+  cache.init().await;
 
   let m = MultiProgress::new();
 // Directory listing (thread) -> hash channel -> hash worker {-> encryption (sharded) channel -> uploader stream
 //                                                           {-> metadata channel
   let (metadata_tx, metadata_rx) = channel();
-  let (hash_tx, hash_rx) = crossbeam_channel::bounded(16);
+  //let (hash_tx, hash_rx) = crossbeam_channel::bounded(16);
 
   let buckets = init_datastores(config.stores.to_vec()).await;
 
-  thread::spawn(move || {
-      for entry in WalkDir::new(config.source) {
-          hash_tx.send(entry.unwrap()).unwrap();
-      }
-  });
-
-  let (upload_tx, upload_channel) = 
-    tokio::sync::mpsc::channel(16); // todo: optimum buffer size?
   let (encryption_rx, encryption_channel) = 
     sharding::ShardedChannel::new_vec(4);
+  let (upload_tx, upload_channel) = tokio::sync::mpsc::channel(16); // todo: optimum buffer size?
+
+  let hmac_secret = config.hmac_secret.clone().to_owned();
+  let source = config.source.clone();
+  let stores = config.stores.to_vec();
+  let cloned_cache = cache.clone();
+  //thread::spawn(move || {
+  tokio::task::spawn(async move {
+    // use rayon::prelude::*;
+    use tokio_stream::StreamExt;
+    let mut stream = tokio_stream::iter(WalkDir::new(source));
+    while let Some(dir_entry) = stream.next().await {
+      let result = match dir_entry {
+        Ok(entry) => hash_worker::hash_work(entry, &cloned_cache, &stores, &hmac_secret).await,
+        Err(_) => { (None, None) }
+      };
+      match result {
+        (Some(upload_request), Some(metadata)) => { 
+          let dh1 = upload_request.data_hash.clone().to_owned();
+          let dh = dh1.as_str();
+          encryption_channel.send(upload_request, dh).unwrap();
+          metadata_tx.send(metadata).unwrap();
+        },
+        _ => {}
+      }
+    }
+    //.buffer_unordered(64).count().await;
+  });
+
+//   let c = ReceiverStream::new(upload_rx).map(|request| async {
+//     pb.inc(1);
+//     pb.set_message(format!("{}", request.data_hash));
+//     let report = upload(request, &buckets).await;
+//     cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
+//     remove_file(report.filename).unwrap();
+// }).buffer_unordered(64).count().await;
 
   {
     let key = Cert::from_file(config.key_file.clone()).unwrap();
@@ -58,10 +89,10 @@ pub async fn run_backup(config: BackupConfig) {
     create_encryption_workers(stores, &config.data_cache, &key, encryption_rx, upload_tx, &m);
   }
 
-  {
-    let stores = config.stores.to_vec();
-    create_hash_workers(hash_rx, metadata_tx, encryption_channel, stores, config.hmac_secret, &m);
-  }
+  // let handles = {
+  //   let stores = config.stores.to_vec();
+  //   create_hash_workers(hash_rx, metadata_tx, encryption_channel, stores, config.hmac_secret, &m, cache.clone())
+  // };
     
   let a = {
     let stores = config.stores.to_vec();
@@ -81,5 +112,5 @@ pub async fn run_backup(config: BackupConfig) {
   a.await.unwrap();
   b.await.unwrap();
 
-  Cache::cleanup();
+  cache.cleanup().await;
 }
