@@ -47,9 +47,18 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, cache: &AsyncCache, stores:
                 None => {
                     let hms = hmac_secret.clone();
                     let de = dir_entry.path().to_owned().clone();
-                    let res = tokio::task::spawn_blocking(move || { // should probs use a different thread pool for this
-                        hash::data(&de, &hms)
-                    }).await.unwrap();
+                    let (send, recv) = tokio::sync::oneshot::channel();
+                    rayon::spawn(move || {
+                        println!("Rayon spawned"); // never runs?
+                        let res = hash::data(&de, &hms);
+                        let _ = send.send(res);
+                    });
+                    println!("Rayon threads: {:?}", rayon::current_num_threads());
+                    println!("Rayon max threads: {:?}", rayon::max_num_threads());
+                    let res = recv.await.expect("Panic in rayon::spawn");
+                    // let res = tokio::task::spawn_blocking(move || { // should probs use a different thread pool for this
+                    //     hash::data(&de, &hms)
+                    // }).await.unwrap();
                     
                     let metadata_hash = hash::metadata(metadata.len(), metadata.mtime(), dir_entry.path());
                     cache.set_data_hash(&metadata_hash, &res).await.unwrap();

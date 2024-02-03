@@ -28,11 +28,19 @@ impl Clone for AsyncCache {
   }
 }
 
+use sqlx::ConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use std::str::FromStr;
+
 // ideally we would replace Cache with AsyncCache
 impl AsyncCache {
   pub async fn new<'b>() -> AsyncCache {
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite:cache.db?mode=rwc").unwrap()
+      .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
     AsyncCache {
-      pool: SqlitePool::connect("sqlite:cache.db?mode=rwc").await.unwrap()
+      pool: SqlitePool::connect_with(options).await.unwrap()
+    
+      //SqlitePool::connect("sqlite:cache.db?mode=rwc").await.unwrap()
     }
   }
 
@@ -48,6 +56,20 @@ impl AsyncCache {
       }
     }
     return Ok(1);
+  }
+
+  pub async fn lock_data(&self, hash: &str) -> bool {
+    let query =
+      sqlx::query("INSERT INTO hash_lock VALUES ($1)")
+        .bind(hash);
+    match self.pool.execute(query).await {
+      Ok(_) => true,
+      Err(_) => false
+    }
+    // if self.pool.execute(query).await.unwrap().rows_affected() != 1 {
+    //   return false;
+    // }
+    // return true;
   }
 
   pub async fn is_data_in_cold_storage(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<bool, sqlx::Error> {
@@ -70,6 +92,7 @@ impl AsyncCache {
   pub async fn init(&self) {
     self.pool.execute(sqlx::query("CREATE TABLE IF NOT EXISTS fs_hash_cache (fs_hash CHARACTER(128) UNIQUE, data_hash CHARACTER(128) NULL, in_use BOOLEAN);")).await.unwrap();
     self.pool.execute(sqlx::query("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT, encrypted_md5 TEXT NULL, datastore_id INTEGER, UNIQUE(data_hash, datastore_id));")).await.unwrap();
+    self.pool.execute(sqlx::query("CREATE TABLE IF NOT EXISTS hash_lock (data_hash TEXT, UNIQUE(data_hash));")).await.unwrap();
     self.pool.execute(sqlx::query("UPDATE fs_hash_cache set in_use = false;")).await.unwrap();
   }
 

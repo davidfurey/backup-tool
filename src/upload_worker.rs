@@ -74,7 +74,7 @@ pub async fn create_uploader(
     trace!("Uploaded {:?} files", c);
 }
 
-async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>) -> UploadReport {
+pub async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>) -> UploadReport {
     trace!("{:?}\n", request.data_hash);
     let mut success_ids: Vec<i32> = Vec::new();
     for (store, bucket, _) in buckets.iter() {
@@ -92,6 +92,32 @@ async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket
     UploadReport { filename: request.filename, data_hash: request.data_hash, store_ids: success_ids }
 }
 
+pub async fn encryption_work(data_cache: &PathBuf, request: UploadRequest, key: &Cert) -> UploadRequest {
+    let destination_filename = data_cache.join(&request.data_hash);
+    //pb.inc(1);
+    // if destination_filename.exists() || cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
+    //     pb.set_message(format!("{} [Skipped]", &request.filename.to_string_lossy()));
+    //     trace!("Skipping {:?} ({:?} already uploaded or in progress)\n", &request.filename, request.data_hash);
+    // } else {
+//        pb.set_message(format!("{}", &request.filename.to_string_lossy()));
+        trace!("Processing as rayon {:?}\n", &request.filename);
+//        {
+            let (send, recv) = tokio::sync::oneshot::channel();
+            let key = key.clone();
+            rayon::spawn(move || {
+                let mut source = fs::File::open(request.filename).unwrap();
+                trace!("Creating {:?}\n", destination_filename);
+                let mut dest = File::create(&destination_filename).unwrap();
+                encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
+                let _ = send.send(UploadRequest { filename: destination_filename, data_hash: request.data_hash });
+            });
+            
+            recv.await.expect("Panic in rayon::spawn")
+        //}
+      //  uploader.blocking_send(UploadRequest { filename: destination_filename, data_hash: request.data_hash }).unwrap();
+    //}
+}
+ 
 fn create_encryption_worker(
     upload_rx: std::sync::mpsc::Receiver<UploadRequest>,
     stores: Vec<DataStore>,
