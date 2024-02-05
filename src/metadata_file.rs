@@ -82,3 +82,44 @@ pub async fn write_metadata_file(path: &PathBuf, metadata_rx: Receiver<FileMetad
   //foobar.await;
   trace!("Metadata written");
 }
+
+pub async fn write_metadata_file2(path: &PathBuf, vec: Vec<FileMetadata>, stores: Vec<DataStore>, key: &Cert) {
+  let data = FileData {
+      data: vec,
+  };
+
+  let random_suffix: String = rand::thread_rng()
+    .sample_iter(&Alphanumeric)
+    .take(4)
+    .map(char::from)
+    .collect();
+
+  let datetime = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+
+  let name = format!("backup-{}-{}.metadata", datetime, random_suffix);
+
+  let filename = path.join(&name);
+
+  trace!("Filename: {:?}", filename);
+  let mut destination = File::create(&filename).unwrap();
+
+  //todo: should be encrypted [done] (and signed?)
+  let policy = openpgp::policy::StandardPolicy::new();
+  let mut enc = encryption::encryptor(&policy, &mut destination, &key).unwrap();
+  data.serialize(&mut Serializer::new(&mut enc)).unwrap();
+  enc.finalize().unwrap();
+
+  // let foobar = futures::stream::iter(stores.iter()).map(|store| async {
+  //   let x = store.metadata_bucket().await;
+  //   let metadata_file = std::fs::File::open(&filename).unwrap();
+  //   x.upload(&name, metadata_file).await.unwrap(); // todo
+  // }).buffer_unordered(4).count();
+  
+  // fn require_send(_: impl Send) {}
+  // require_send(foobar);
+  let x = stores.get(0).unwrap().metadata_bucket().await;
+  let metadata_file = std::fs::File::open(&filename).unwrap();
+  x.upload(&name, metadata_file).await.unwrap(); // todo
+  //foobar.await;
+  trace!("Metadata written");
+}
