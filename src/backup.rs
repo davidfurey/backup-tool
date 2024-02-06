@@ -1,3 +1,4 @@
+use indicatif::MultiProgress;
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use walkdir::WalkDir;
@@ -37,9 +38,13 @@ pub async fn run_backup(config: BackupConfig) {
 
   use futures::StreamExt;
   let stream = futures::stream::iter(WalkDir::new(source));
+  let multi_progress = MultiProgress::new();
+
   let v = stream.map(|dir_entry| async {
     let result = match dir_entry {
-      Ok(entry) => hash_worker::hash_work(entry, &cloned_cache, &stores, &hmac_secret).await,
+      Ok(entry) => {
+        hash_worker::hash_work(entry, &cloned_cache, &stores, &hmac_secret, &multi_progress).await
+      },
       Err(_) => { (None, None) }
     };
     match result.0 {
@@ -47,7 +52,7 @@ pub async fn run_backup(config: BackupConfig) {
         if !cache.is_data_in_cold_storage(&upload_request.data_hash, &stores).await.unwrap() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
           // check here if it is encrypted on the filesystem?
           let key = Cert::from_file(&config.key_file).unwrap();
-          let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key).await;
+          let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, &multi_progress).await;
           let report = upload_worker::upload(upload_request2, &buckets).await;
           cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
           std::fs::remove_file(report.filename).unwrap();

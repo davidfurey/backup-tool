@@ -28,19 +28,14 @@ impl Clone for AsyncCache {
   }
 }
 
-use sqlx::ConnectOptions;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::str::FromStr;
 
-// ideally we would replace Cache with AsyncCache
 impl AsyncCache {
   pub async fn new<'b>() -> AsyncCache {
     let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite:cache.db?mode=rwc").unwrap()
       .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
     AsyncCache {
       pool: SqlitePool::connect_with(options).await.unwrap()
-    
-      //SqlitePool::connect("sqlite:cache.db?mode=rwc").await.unwrap()
     }
   }
 
@@ -66,10 +61,6 @@ impl AsyncCache {
       Ok(_) => true,
       Err(_) => false
     }
-    // if self.pool.execute(query).await.unwrap().rows_affected() != 1 {
-    //   return false;
-    // }
-    // return true;
   }
 
   pub async fn is_data_in_cold_storage(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<bool, sqlx::Error> {
@@ -149,30 +140,4 @@ impl AsyncCache {
     return result.map(|x| x.rows_affected());
   }  
 
-}
-
-impl Cache {
-  pub fn new<'b>() -> Cache {
-    Cache {
-      connection: Cache::db_connect().unwrap(),
-    }
-  }
-
-  fn db_connect() -> Result<Connection, Error> {
-    return Connection::open("cache.db");
-  }
-  
-  pub fn is_data_in_cold_storage(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<bool, rusqlite::Error> {
-    let mut stmt = self.connection.prepare("SELECT 1 FROM uploaded_objects WHERE data_hash = ? and datastore_id = ?").unwrap();
-    for store in stores {
-        let mut rows = stmt.query([data_hash, store.id.to_string().as_str()]).unwrap();
-        match rows.next() {
-            Ok(None) => return Ok(false),
-            Ok(_) => { },
-            Err(x) => return Err(x)
-        };
-    }
-    return Ok(true);
-  }
-    
 }

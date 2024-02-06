@@ -1,6 +1,5 @@
 pub mod encryption;
 pub mod decryption;
-pub mod sharding;
 pub mod swift;
 pub mod datastore;
 pub mod metadata_file;
