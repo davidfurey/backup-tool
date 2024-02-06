@@ -5,16 +5,11 @@ use crate::datastore;
 use crate::hash;
 
 use std::os::unix::prelude::MetadataExt;
-use rusqlite::{Connection, Result, Error};
 use datastore::DataStore;
 use sqlx::Executor;
 use sqlx::Row;
 use sqlx::SqlitePool;
 use sqlx;
-
-pub struct Cache {
-  connection: Connection
-}
 
 pub struct AsyncCache {
   pool: SqlitePool

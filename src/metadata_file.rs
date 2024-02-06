@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
 use std::fs::File;
 use log::trace;
 use serde::Serialize;

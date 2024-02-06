@@ -1,18 +1,14 @@
 use std::path::PathBuf;
 use std::fs;
 use std::fs::File;
-use std::fs::remove_file;
 
 use log::error;
 use log::trace;
 use sequoia_openpgp::Cert;
 
-use crate::{datastore, swift, sqlite_cache, encryption};
+use crate::{datastore, swift, encryption};
 use datastore::DataStore;
 use swift::Bucket;
-use sqlite_cache::AsyncCache;
-use tokio_stream::wrappers::ReceiverStream;
-use futures::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 #[derive(Debug)]
