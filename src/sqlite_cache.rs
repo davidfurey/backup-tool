@@ -86,12 +86,12 @@ impl AsyncCache {
     self.pool.execute(sqlx::query("DELETE FROM fs_hash_cache WHERE in_use = false;")).await.unwrap();
   }
 
-  pub async fn try_get_hash(&self, path: &Path, metadata: &Metadata) -> Result<Option<String>, rusqlite::Error> {
+  pub async fn try_get_hash(&self, path: &Path, metadata: &Metadata) -> Result<Option<String>, sqlx::Error> {
     use futures::TryFutureExt;
     let metadata_hash = hash::metadata(metadata.len(), metadata.mtime(), path);
 
     self.mark_used_and_lookup_hash(&metadata_hash)
-      .and_then(|v| async {
+      .and_then(|v: Option<_>| async {
         match v {
           Some(s) => return Ok(Some(s)),
           None => Ok(None)
@@ -99,7 +99,7 @@ impl AsyncCache {
       }).await
   }
 
-  pub async fn get_hash(&self, path: &Path, metadata: &Metadata, hmac_secret: &str) -> Result<String, rusqlite::Error> {
+  pub async fn get_hash(&self, path: &Path, metadata: &Metadata, hmac_secret: &str) -> Result<String, sqlx::Error> {
     use futures::TryFutureExt;
     let metadata_hash = hash::metadata(metadata.len(), metadata.mtime(), path);
 
@@ -116,7 +116,7 @@ impl AsyncCache {
       }).await
   }
 
-  async fn mark_used_and_lookup_hash(&self, filename: &str) -> Result<Option<String>, rusqlite::Error> {
+  async fn mark_used_and_lookup_hash(&self, filename: &str) -> Result<Option<String>, sqlx::Error> {
     let query = sqlx::query("INSERT INTO fs_hash_cache (fs_hash, in_use) VALUES(?, true) ON CONFLICT(fs_hash) do UPDATE set in_use = true RETURNING data_hash")
       .bind(filename);
     let row = self.pool.fetch_one(query).await;
