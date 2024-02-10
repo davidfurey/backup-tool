@@ -53,7 +53,7 @@ pub async fn run_backup(config: BackupConfig) {
           // check here if it is encrypted on the filesystem?
           let key = Cert::from_file(&config.key_file).unwrap();
           let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, &multi_progress).await;
-          let report = upload_worker::upload(upload_request2, &buckets).await;
+          let report = upload_worker::upload(upload_request2, &buckets, &multi_progress).await;
           cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
           std::fs::remove_file(report.filename).unwrap();
         }
@@ -71,7 +71,6 @@ pub async fn run_backup(config: BackupConfig) {
   let mc = config.metadata_cache.clone();
   crate::metadata_file::write_metadata_file2(&mc, a, stores, &key).await;
   cache.cleanup().await;
-
   return ()
 
 }

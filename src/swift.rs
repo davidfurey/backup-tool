@@ -1,4 +1,5 @@
 use std::fs::File;
+use futures::TryStreamExt;
 use log::error;
 use osauth::Session;
 use osauth::services::OBJECT_STORAGE;
@@ -35,6 +36,16 @@ impl Bucket {
       let tokio_file = tokio::fs::File::from(source);
       return self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
         .body(tokio_file)
+        .send().await;
+    }
+
+    pub async fn upload_with_progress(&self, key: &str, source: File, callback: impl Fn(usize) + Sync + Send + 'static) -> Result<reqwest::Response, osauth::Error> {
+      let tokio_file = tokio::fs::File::from(source);
+      let stream = tokio_util::io::ReaderStream::new(tokio_file).inspect_ok(move |bytes| {
+        callback(bytes.len())
+      });
+      return self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
+        .body(reqwest::Body::wrap_stream(stream))
         .send().await;
     }
 

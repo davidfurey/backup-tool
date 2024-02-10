@@ -23,13 +23,28 @@ pub struct UploadReport {
     pub store_ids: Vec<i32>,
 }
 
-pub async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>) -> UploadReport {
+pub async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bucket)>, mp: &MultiProgress) -> UploadReport {
     trace!("{:?}\n", request.data_hash);
     let mut success_ids: Vec<i32> = Vec::new();
+    let style =
+        ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
+            .unwrap()
+            .progress_chars("#>-");
     for (store, bucket, _) in buckets.iter() {
         let encrypted_file = fs::File::open(&request.filename).unwrap();
         let key = format!("{}{}", store.data_prefix, request.data_hash);
-        match bucket.upload(&key, encrypted_file).await {
+
+        let pb = mp.add(ProgressBar::new(encrypted_file.metadata().unwrap().len()));
+        pb.set_style(style.clone());
+        pb.set_message(format!("{}", &request.data_hash[..16]));
+        pb.set_prefix("[Upload] ");
+        let callback = move |bytes: usize| {
+            pb.inc(u64::try_from(bytes).unwrap_or(0));
+            if pb.is_finished() {
+                pb.finish_and_clear();
+            }
+        };
+        match bucket.upload_with_progress(&key, encrypted_file, callback).await {
             Ok(_) => {
                 success_ids.push(store.id);
             },
