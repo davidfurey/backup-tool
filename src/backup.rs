@@ -37,7 +37,7 @@ pub async fn run_backup(config: BackupConfig) {
   let cloned_cache = cache.clone();
 
   use futures::StreamExt;
-  let stream = futures::stream::iter(WalkDir::new(source));
+  let stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(source));
   let multi_progress = MultiProgress::new();
 
   let v = stream.map(|dir_entry| async {
@@ -51,7 +51,7 @@ pub async fn run_backup(config: BackupConfig) {
       Some(upload_request) => {
         if !cache.is_data_in_cold_storage(&upload_request.data_hash, &stores).await.unwrap() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
           // check here if it is encrypted on the filesystem?
-          let key = Cert::from_file(&config.key_file).unwrap();
+          let key = Cert::from_file(&config.encrypting_key_file).unwrap();
           let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, &multi_progress).await;
           let report = upload_worker::upload(upload_request2, &buckets, &multi_progress).await;
           cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
@@ -65,11 +65,12 @@ pub async fn run_backup(config: BackupConfig) {
   });
   let a: Vec<crate::metadata_file::FileMetadata> = v.buffered(64).filter_map(|x| async {
     x
-  }).collect().await;
+  }).collect().await; // todo: stream this to disk. Via sqlite.
 
-  let key = Cert::from_file(config.key_file.clone()).unwrap();
+  let encrypting_key = Cert::from_file(config.encrypting_key_file.clone()).unwrap();
+  let signing_key = config.signing_key_file.clone().map(|x| Cert::from_file(x).unwrap());
   let mc = config.metadata_cache.clone();
-  crate::metadata_file::write_metadata_file2(&mc, a, stores, &key).await;
+  crate::metadata_file::write_metadata_file(&mc, a, stores, &encrypting_key, &signing_key, &multi_progress).await;
   cache.cleanup().await;
   return ()
 

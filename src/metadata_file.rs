@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::fs::File;
-use log::trace;
+use indicatif::{ProgressBar, ProgressStyle, MultiProgress, ProgressFinish};
+use log::{trace, info};
 use serde::Serialize;
 extern crate rmp_serde as rmps;
 use rmps::Serializer;
@@ -30,7 +31,7 @@ pub struct FileMetadata {
 }
 
 // NB - arrays in messagepack announce their length upfront, so streaming is not possible
-pub async fn write_metadata_file2(path: &PathBuf, vec: Vec<FileMetadata>, stores: Vec<DataStore>, key: &Cert) {
+pub async fn write_metadata_file(path: &PathBuf, vec: Vec<FileMetadata>, stores: Vec<DataStore>, encrypting_key: &Cert, signing_key: &Option<Cert>, mp: &MultiProgress) {
   let data = FileData {
       data: vec,
   };
@@ -50,14 +51,43 @@ pub async fn write_metadata_file2(path: &PathBuf, vec: Vec<FileMetadata>, stores
   trace!("Filename: {:?}", filename);
   let mut destination = File::create(&filename).unwrap();
 
-  //todo: should be encrypted [done] (and signed?)
   let policy = openpgp::policy::StandardPolicy::new();
-  let mut enc = encryption::encryptor(&policy, &mut destination, &key).unwrap();
+  let mut enc = encryption::encryptor(&policy, &mut destination, &encrypting_key, &signing_key).unwrap();
   data.serialize(&mut Serializer::new(&mut enc)).unwrap();
   enc.finalize().unwrap();
 
-  let x = stores.get(0).unwrap().metadata_bucket().await;
+  let x = stores.get(0).unwrap().metadata_bucket().await; // todo: write to all buckets
   let metadata_file = std::fs::File::open(&filename).unwrap();
-  x.upload(&name, metadata_file).await.unwrap(); // todo
+
+  let pb = mp.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
+    .with_finish(ProgressFinish::AndLeave);
+  let style =
+        ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
+            .unwrap()
+            .progress_chars("#>-");
+
+  pb.set_style(style.clone());
+  pb.set_message(format!("{}", &name));
+  pb.set_prefix("[Upload] ");
+  let callback = move |bytes: usize| {
+      pb.inc(u64::try_from(bytes).unwrap_or(0));
+      if pb.is_finished() {
+          //pb.finish_and_clear();
+      }
+  };
+
+  x.upload_with_progress(&name, metadata_file, callback).await.unwrap();
+  std::fs::remove_file(&filename).unwrap();
+
+  // match bucket.upload_with_progress(&key, encrypted_file, callback).await {
+  //     Ok(_) => {
+  //         success_ids.push(store.id);
+  //     },
+  //     _ => {
+  //         error!("Failed to upload {:?} to {:?}\n", request.data_hash, store.id)
+  //     }
+  // }
+
+  info!("Uploaded metadata {}", &name);
   trace!("Metadata written");
 }

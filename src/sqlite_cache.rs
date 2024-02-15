@@ -80,6 +80,7 @@ impl AsyncCache {
     self.pool.execute(sqlx::query("CREATE TABLE IF NOT EXISTS uploaded_objects (data_hash TEXT, encrypted_md5 TEXT NULL, datastore_id INTEGER, UNIQUE(data_hash, datastore_id));")).await.unwrap();
     self.pool.execute(sqlx::query("CREATE TABLE IF NOT EXISTS hash_lock (data_hash TEXT, UNIQUE(data_hash));")).await.unwrap();
     self.pool.execute(sqlx::query("UPDATE fs_hash_cache set in_use = false;")).await.unwrap();
+    self.pool.execute(sqlx::query("DELETE FROM hash_lock;")).await.unwrap();
   }
 
   pub async fn cleanup(&self) {

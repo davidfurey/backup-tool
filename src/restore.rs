@@ -21,6 +21,7 @@ use filetime::{set_file_mtime, FileTime};
 
 async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf) {
   // todo: avoid repeating downloads
+  // todo: verify hash matches expected
   let destination_filename = cache.join(format!("{}.gpg", data_hash));
   trace!("attempting to create {:?}", destination_filename);
   let encrypted_file = File::create(&destination_filename).unwrap();

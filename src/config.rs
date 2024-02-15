@@ -10,5 +10,6 @@ pub struct BackupConfig {
     pub metadata_cache: PathBuf,
     pub stores: Vec<DataStore>,
     pub hmac_secret: String,
-    pub key_file: PathBuf,
+    pub encrypting_key_file: PathBuf,
+    pub signing_key_file: Option<PathBuf>,
 }

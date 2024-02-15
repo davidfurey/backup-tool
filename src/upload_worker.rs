@@ -41,7 +41,7 @@ pub async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bu
         let callback = move |bytes: usize| {
             pb.inc(u64::try_from(bytes).unwrap_or(0));
             if pb.is_finished() {
-                pb.finish_and_clear();
+                pb.finish_and_clear(); // todo: is this required?
             }
         };
         match bucket.upload_with_progress(&key, encrypted_file, callback).await {
@@ -58,39 +58,29 @@ pub async fn upload(request: UploadRequest, buckets: &Vec<(DataStore, Bucket, Bu
 
 pub async fn encryption_work(data_cache: &PathBuf, request: UploadRequest, key: &Cert, mp: &MultiProgress) -> UploadRequest {
     let destination_filename = data_cache.join(&request.data_hash);
-    //pb.inc(1);
-    // if destination_filename.exists() || cache.is_data_in_cold_storage(&request.data_hash, &stores).unwrap() {
-    //     pb.set_message(format!("{} [Skipped]", &request.filename.to_string_lossy()));
-    //     trace!("Skipping {:?} ({:?} already uploaded or in progress)\n", &request.filename, request.data_hash);
-    // } else {
-//        pb.set_message(format!("{}", &request.filename.to_string_lossy()));
-        trace!("Processing as rayon {:?}\n", &request.filename);
-//        {
-            let (send, recv) = tokio::sync::oneshot::channel();
-            let key = key.clone();
-            let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
-                .unwrap()
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
-            let mp = mp.clone();
+    trace!("Processing as rayon {:?}\n", &request.filename);
+    let (send, recv) = tokio::sync::oneshot::channel();
+    let key = key.clone();
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
+        .unwrap()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let mp = mp.clone();
 
-            let filename = format!("{:?}", request.data_hash);
-            rayon::spawn(move || {
-                let pb = mp.add(ProgressBar::new_spinner());
-                pb.set_style(spinner_style.clone());
-                pb.set_prefix(format!("[Encrypt]"));
-                pb.inc(1);
-                pb.set_message(format!("{}", filename));                
+    let filename = format!("{:?}", request.data_hash);
+    rayon::spawn(move || {
+        let pb = mp.add(ProgressBar::new_spinner());
+        pb.set_style(spinner_style.clone());
+        pb.set_prefix(format!("[Encrypt]"));
+        pb.inc(1);
+        pb.set_message(format!("{}", filename));
 
-                let mut source = fs::File::open(request.filename).unwrap();
-                trace!("Creating {:?}\n", destination_filename);
-                let mut dest = File::create(&destination_filename).unwrap();
-                encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
-                pb.finish_and_clear();
-                let _ = send.send(UploadRequest { filename: destination_filename, data_hash: request.data_hash });
-            });
+        let mut source = fs::File::open(request.filename).unwrap();
+        trace!("Creating {:?}\n", destination_filename);
+        let mut dest = File::create(&destination_filename).unwrap();
+        encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
+        pb.finish_and_clear();
+        let _ = send.send(UploadRequest { filename: destination_filename, data_hash: request.data_hash });
+    });
             
-            recv.await.expect("Panic in rayon::spawn")
-        //}
-      //  uploader.blocking_send(UploadRequest { filename: destination_filename, data_hash: request.data_hash }).unwrap();
-    //}
+    recv.await.expect("Panic in rayon::spawn")
 }

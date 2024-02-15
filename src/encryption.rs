@@ -21,7 +21,7 @@ pub fn encrypt_file(source: &mut File, dest: &mut File, key: &Cert) -> openpgp::
 }
 
 pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
-          recipient: &'a openpgp::Cert)
+          recipient: &'a openpgp::Cert, signing_cert: &'a Option<openpgp::Cert>)
     -> openpgp::Result<openpgp::serialize::stream::Message<'a>>
 {
     let recipients =
@@ -29,14 +29,33 @@ pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
         .for_transport_encryption();
 
     // Start streaming an OpenPGP message.
-    let message = Message::new(sink);
+    let mut message = Message::new(sink);
 
     // We want to encrypt a literal data packet.
-    let message = Encryptor::for_recipients(message, recipients)
+    message = Encryptor::for_recipients(message, recipients)
         .build()?;
 
-    let message = Compressor::new(message)
+    message = Compressor::new(message)
       .build()?;
+
+    let signing_key = signing_cert.as_ref().and_then(|x|
+        x.keys()
+            .with_policy(p, None).alive().revoked(false).for_signing().secret()
+            .filter(|ka| ka.has_unencrypted_secret())
+            .map(|ka| ka.key())
+            .next()
+    );
+
+    match signing_key {
+        Some(v) => {
+            message = Signer::new(message, v.clone().into_keypair().expect("Key was unexpectedly encrypted")).build().unwrap();
+        }
+        None => {
+            if signing_key.is_some() {
+                panic!("Unable to find appropriate signing keypair despite certificate being provided")
+            }
+        }
+    }
 
     // Emit a literal data packet.
     let message = LiteralWriter::new(message)
