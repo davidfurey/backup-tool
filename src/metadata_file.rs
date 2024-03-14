@@ -20,8 +20,9 @@ pub struct FileData {
     pub data: Vec<FileMetadata>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FileMetadata {
+    pub uid : i64,
     pub name: String,
     pub mtime: i64,
     pub mode: u32,
@@ -56,27 +57,29 @@ pub async fn write_metadata_file(path: &PathBuf, vec: Vec<FileMetadata>, stores:
   data.serialize(&mut Serializer::new(&mut enc)).unwrap();
   enc.finalize().unwrap();
 
-  let x = stores.get(0).unwrap().metadata_bucket().await; // todo: write to all buckets
-  let metadata_file = std::fs::File::open(&filename).unwrap();
+  for store in stores.iter() {
+    let x = store.metadata_bucket().await; // todo: write to all buckets
+    let metadata_file = std::fs::File::open(&filename).unwrap();
 
-  let pb = mp.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
-    .with_finish(ProgressFinish::AndLeave);
-  let style =
-        ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
-            .unwrap()
-            .progress_chars("#>-");
+    let pb = mp.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
+      .with_finish(ProgressFinish::AndLeave);
+    let style =
+          ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
+              .unwrap()
+              .progress_chars("#>-");
 
-  pb.set_style(style.clone());
-  pb.set_message(format!("{}", &name));
-  pb.set_prefix("[Upload] ");
-  let callback = move |bytes: usize| {
-      pb.inc(u64::try_from(bytes).unwrap_or(0));
-      if pb.is_finished() {
-          //pb.finish_and_clear();
-      }
-  };
+    pb.set_style(style.clone());
+    pb.set_message(format!("{}", &name));
+    pb.set_prefix("[Upload] ");
+    let callback = move |bytes: usize| {
+        pb.inc(u64::try_from(bytes).unwrap_or(0));
+        if pb.is_finished() {
+            //pb.finish_and_clear();
+        }
+    };
 
-  x.upload_with_progress(&name, metadata_file, callback).await.unwrap();
+    x.upload_with_progress(&name, metadata_file, callback).await.unwrap();
+  }
   std::fs::remove_file(&filename).unwrap();
 
   // match bucket.upload_with_progress(&key, encrypted_file, callback).await {

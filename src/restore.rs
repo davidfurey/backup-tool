@@ -8,10 +8,8 @@ use sequoia_openpgp::parse::Parse;
 use crate::datastore;
 use datastore::DataStore;
 extern crate rmp_serde as rmps;
-use crate::metadata_file::{self, FileMetadata};
-use metadata_file::FileData;
+use crate::metadata_file::FileMetadata;
 use crate::decryption;
-use decryption::Decryption;
 use std::fs::{File, set_permissions, create_dir_all, remove_dir_all};
 use std::os::unix::fs::symlink;
 use crate::filetype;
@@ -101,23 +99,28 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
 
   let metadata_bucket = store.metadata_bucket().await;
   let data_bucket = store.init().await;
-  let destination_filename = destination.join(".data/metadata.gpg");
+  let encrypted_metadata_file = destination.join(".data/metadata.gpg");
+  let metadata_file = destination.join(".data/metadata");
   let data_cache = destination.join(".data");
-  trace!("creating {:?}", destination_filename);
-  let encrypted_file = File::create(&destination_filename).unwrap();
+  trace!("creating {:?}", encrypted_metadata_file);
+  let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
   metadata_bucket.download(format!("{backup}.metadata").as_str(), encrypted_file).await.unwrap();
   
-  let mut encrypted_file_read = File::open(&destination_filename).unwrap();
   let key = Cert::from_file(key_file).unwrap();
-  let decryption = Decryption::new(key.clone());
-  let decrypted = decryption.decrypt(&mut encrypted_file_read);
-  let mut decryptor = decrypted;
-  let metadata: FileData = rmps::from_read(&mut decryptor).unwrap();
+  let mut source = File::open(&encrypted_metadata_file).unwrap();
+  let mut dest = File::create(&metadata_file).unwrap();
+  decryption::decrypt_file(&mut source, &mut dest, &key).unwrap();
+
+  let metadata_reader = crate::metadata_file_sql::MetadataReader::new(metadata_file).await;
 
   trace!("Destination: {:?}", destination.as_path());
-  futures::stream::iter(metadata.data.iter())
-    .map(|entry| async {
-      process_file(entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key).await
+  let destination = &destination;
+  let data_bucket = &data_bucket;
+  let data_cache = &data_cache;
+  let key = &key;
+  metadata_reader.read().await
+    .map(|entry| async move {
+      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key).await
     })
     .buffer_unordered(4)
     .count()

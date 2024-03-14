@@ -11,6 +11,8 @@ use sqlx::Row;
 use sqlx::SqlitePool;
 use sqlx;
 
+use log::error;
+
 pub struct AsyncCache {
   pool: SqlitePool
 }
@@ -41,8 +43,23 @@ impl AsyncCache {
           .bind(hash)
           .bind(md5_hash)
           .bind(store_id);
-      if self.pool.execute(query).await.unwrap().rows_affected() != 1 {
-        return Err("Query failed".to_string())
+      match self.pool.execute(query).await {
+        Ok(r) if r.rows_affected() ==1 => {
+
+        },
+        Err(e) => {
+          error!("Attempting to insert hash {:?} for store {:?} failed", hash, store_id);
+          error!("Stores requested:");
+          for x in store_ids {
+            error!("{}", *x);
+          }
+          error!("{:?}", e);
+          return Err("Query failed".to_string())
+        }
+        _ => {
+          error!("Attempting to insert hash {:?} for store {:?} failed", hash, store_id);
+          return Err("Query failed".to_string())
+        }
       }
     }
     return Ok(1);
@@ -58,21 +75,25 @@ impl AsyncCache {
     }
   }
 
-  pub async fn is_data_in_cold_storage(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<bool, sqlx::Error> {
-    for store in stores {
-      let store_id = store.id.to_string();
-      let query = sqlx::query("SELECT 1 FROM uploaded_objects WHERE data_hash = ? and datastore_id = ?")
-        .bind(data_hash)
-        .bind(store_id.as_str());
-      let row = self.pool.fetch_one(query).await;
+  pub async fn requires_upload(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<Vec<i32>, sqlx::Error> { //todo: this should return a list of stores that don't have the data
+    let query = sqlx::query("SELECT datastore_id FROM uploaded_objects WHERE data_hash = ?")
+      .bind(data_hash);
 
-      match row {
-          Ok(_) => { },
-          Err(sqlx::Error::RowNotFound) => return Ok(false),
-          Err(x) => return Err(x)
-      };
-    }
-    return Ok(true);
+    let results = self.pool.fetch_all(query).await;
+
+    results.map(|rows| {
+      let uploaded_ids: Vec<i32> = rows.iter().map(|row| {
+        row.get(0)
+      }).collect();
+
+      stores.iter().filter_map(|store| {
+        if uploaded_ids.contains(&(store.id)) {
+          None
+        } else {
+          Some(store.id)
+        }
+      }).collect()
+    })
   }
 
   pub async fn init(&self) {

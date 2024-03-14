@@ -7,7 +7,7 @@ use filetype::FileType;
 use upload_worker::UploadRequest;
 
 
-pub async fn hash_work(dir_entry: walkdir::DirEntry, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress) -> (Option<UploadRequest>, Option<FileMetadata>) {
+pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress) -> (Option<UploadRequest>, Option<FileMetadata>) {
     let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
     let mut destination: Option<String> = None;
     let mut data_hash: Option<String> = None;
@@ -46,7 +46,8 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, cache: &AsyncCache, stores:
                 }
             };
             
-            if !cache.is_data_in_cold_storage(&d_hash, &stores).await.unwrap() {
+            let requires_upload = cache.requires_upload(&d_hash, &stores).await.unwrap();
+            if !requires_upload.is_empty() {
                 trace!("Sending {:?} to upload queue\n", dir_entry.file_name());
                 upload_request = Some(UploadRequest {
                     filename: dir_entry.path().to_path_buf(),  
@@ -66,6 +67,7 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, cache: &AsyncCache, stores:
 
     let file_metadata = file_type.map(|ttype| {
         metadata_file::FileMetadata {
+            uid: id as i64,
             name: dir_entry.path().to_string_lossy().to_string(),
             mtime: metadata.mtime(),
             mode: metadata.mode(),

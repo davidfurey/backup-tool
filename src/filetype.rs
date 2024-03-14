@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, strum::Display, sqlx::Type)]
 pub enum FileType {
     FILE,
     SYMLINK,

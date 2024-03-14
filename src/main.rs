@@ -13,6 +13,7 @@ pub mod backup;
 pub mod restore;
 pub mod list;
 pub mod query;
+pub mod metadata_file_sql;
 
 use std::path::PathBuf;
 
@@ -50,6 +51,15 @@ async fn main() {
     let cli = Cli::parse();
     let content = std::fs::read_to_string("backup.toml").unwrap();
     let config: BackupConfig = toml::from_str(&content).unwrap();
+
+
+    let orig_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        println!("Exiting due to panic");
+        std::process::exit(1);
+    }));
 
     match &cli.command {
         Commands::Backup {} => {
