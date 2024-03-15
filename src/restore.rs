@@ -16,11 +16,21 @@ use crate::filetype;
 use filetype::FileType;
 use crate::swift::Bucket;
 use filetime::{set_file_mtime, FileTime};
+use rand::{distributions::Alphanumeric, Rng};
 
 async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf) {
   // todo: avoid repeating downloads
   // todo: verify hash matches expected
-  let destination_filename = cache.join(format!("{}.gpg", data_hash));
+  
+  // this is to avoid the risk of two threads downloading the same data blog at the same time and stepping on eachothers toes.
+  // based on the highly scientific process of restoring a backup 10 times and seeing a race condition happen >5 times, and restoring 10 times with
+  // no errors after this change, it seems to work.
+  let random_suffix: String = rand::thread_rng() 
+    .sample_iter(&Alphanumeric)
+    .take(4)
+    .map(char::from)
+    .collect();
+  let destination_filename = cache.join(format!("{}{}.gpg", data_hash, random_suffix));
   trace!("attempting to create {:?}", destination_filename);
   let encrypted_file = File::create(&destination_filename).unwrap();
   let key = format!("{}{}", data_prefix, data_hash);
