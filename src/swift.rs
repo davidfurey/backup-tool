@@ -28,7 +28,6 @@ impl Bucket {
         Bucket {
             session,
             container: container.to_string(),
-            //session: osauth::Session::from_env().unwrap(),
         }
     }
 

@@ -121,7 +121,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   let mut dest = File::create(&metadata_file).unwrap();
   decryption::decrypt_file(&mut source, &mut dest, &key).unwrap();
 
-  let metadata_reader = crate::metadata_file_sql::MetadataReader::new(metadata_file).await;
+  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
 
   trace!("Destination: {:?}", destination.as_path());
   let destination = &destination;

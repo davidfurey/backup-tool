@@ -13,7 +13,6 @@ pub mod backup;
 pub mod restore;
 pub mod list;
 pub mod query;
-pub mod metadata_file_sql;
 
 use std::path::PathBuf;
 
