@@ -171,6 +171,7 @@ pub async fn run_backup(config: BackupConfig) {
   // let mc = config.metadata_cache.clone();
   // crate::metadata_file::write_metadata_file(&mc, metadata, config.stores.to_vec(), &encrypting_key, &signing_key, &multi_progress).await;
   cache.cleanup().await;
+  cache.close().await;
   return ()
 
 }

@@ -157,4 +157,8 @@ impl AsyncCache {
     return result.map(|x| x.rows_affected());
   }  
 
+  pub async fn close(&self) -> () {
+    return self.pool.close().await
+  }
+
 }
