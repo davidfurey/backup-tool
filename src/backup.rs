@@ -13,11 +13,11 @@ use config::BackupConfig;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
 
-pub async fn init_datastore(store: &DataStore) -> (DataStore, Bucket, Bucket) {
+async fn init_datastore(store: &DataStore) -> (DataStore, Bucket, Bucket) {
   (store.clone(), store.init().await, store.metadata_bucket().await)
 }
 
-pub async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, Bucket)> {
+async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, Bucket)> {
   tokio::task::spawn(async move {
     let mut buckets: Vec<(DataStore, Bucket, Bucket)> = Vec::new();
     for bucket in stores.iter() {
@@ -27,32 +27,40 @@ pub async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, 
   }).await.unwrap()
 }
 
-pub async fn run_backup(config: BackupConfig) {
-
-  let cache = AsyncCache::new().await;
-  cache.init().await;
-  let buckets = init_datastores(config.stores.to_vec()).await;
-
-  use futures::StreamExt;
-  let stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(&config.source));
+pub fn generate_name() -> String{
+  let datetime = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
   let random_suffix: String = rand::thread_rng()
     .sample_iter(&Alphanumeric)
     .take(4)
     .map(char::from)
     .collect();
-  let datetime = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-  let metadata_filename = format!("backup-{}-{}.metadata.sqlite", datetime, random_suffix);
-  let metadata_filename_encrypted = format!("backup-{}-{}.metadata", datetime, random_suffix);
-  let metadata_file = config.metadata_cache.clone().join(metadata_filename.clone());
-  let metadata_file_encrypted = config.metadata_cache.clone().join(metadata_filename_encrypted.clone());
+  format!("backup-{}-{}", datetime, random_suffix)
+}
+
+pub async fn run_backup(config: BackupConfig, name: String) {
+
+  let cache = AsyncCache::new().await;
+  cache.init().await;
+  let buckets = init_datastores(config.stores.to_vec()).await;
+
+  let metadata_file = {
+    let metadata_filename = format!("{}.metadata.sqlite", name);
+    config.metadata_cache.clone().join(metadata_filename.clone())
+  };
+  
   let metadata_writer = crate::metadata_file::MetadataWriter::new(metadata_file.clone()).await;
+
   let multi_progress = MultiProgress::new();
 
   let config = &config;
   let cache = &cache;
   let multi_progress = &multi_progress;
   let buckets = &buckets;
-  let v = stream
+
+  use futures::StreamExt;
+  let directory_stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(&config.source));
+
+  directory_stream
     .enumerate()
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
@@ -80,8 +88,7 @@ pub async fn run_backup(config: BackupConfig) {
       }
     }
     result.1
-  });
-  v.buffered(64).for_each(|x| async { // does for_each here mean that the buffered(64) is moot?
+  }).buffered(64).for_each(|x| async { // does for_each here mean that the buffered(64) is moot?
     match x {
       Some(metadata) => {
         metadata_writer.write(&metadata).await.unwrap();
@@ -89,11 +96,19 @@ pub async fn run_backup(config: BackupConfig) {
       None => {}
     }
   }).await;
+
   metadata_writer.close().await;
-  let mut source = File::open(&metadata_file).unwrap();
-  let mut dest = File::create(&metadata_file_encrypted).unwrap();
-  let encrypting_key = Cert::from_file(config.encrypting_key_file.clone()).unwrap();
-  encryption::encrypt_file(&mut source, &mut dest, &encrypting_key).unwrap();
+
+  let metadata_filename_encrypted = format!("{}.metadata", name);
+  let metadata_file_encrypted = config.metadata_cache.clone().join(metadata_filename_encrypted.clone());
+  
+  {
+    let mut source = File::open(&metadata_file).unwrap();
+    let mut dest = File::create(&metadata_file_encrypted).unwrap();
+    let encrypting_key = Cert::from_file(config.encrypting_key_file.clone()).unwrap();
+    encryption::encrypt_file(&mut source, &mut dest, &encrypting_key).unwrap();
+  }
+  std::fs::remove_file(&metadata_file).unwrap();
   
   for store in config.stores.iter() {
     let x = store.metadata_bucket().await;
@@ -118,7 +133,6 @@ pub async fn run_backup(config: BackupConfig) {
 
     x.upload_with_progress(&metadata_filename_encrypted, metadata_file, callback).await.unwrap();
   }
-  std::fs::remove_file(&metadata_file).unwrap();
   std::fs::remove_file(&metadata_file_encrypted).unwrap();
 
   cache.cleanup().await;

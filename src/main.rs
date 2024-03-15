@@ -62,7 +62,7 @@ async fn main() {
 
     match &cli.command {
         Commands::Backup {} => {
-            backup::run_backup(config).await
+            backup::run_backup(config, backup::generate_name()).await
         }
         Commands::Restore { name, destination } => {
             restore::restore_backup(

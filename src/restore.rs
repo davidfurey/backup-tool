@@ -103,14 +103,15 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     return;
   }
 
+  // todo: same progress meters as backup
   // todo: should we make this filename less likely to be something that might be included in an actual backup? Random perhaps?
   let temporary_data_dir = destination.join(".data");
   create_dir_all(&temporary_data_dir).unwrap();
 
   let metadata_bucket = store.metadata_bucket().await;
   let data_bucket = store.init().await;
-  let encrypted_metadata_file = destination.join(".data/metadata.gpg");
-  let metadata_file = destination.join(".data/metadata");
+  let encrypted_metadata_file = destination.join(".data/metadata");
+  let metadata_file = destination.join(".data/metadata.sqlite");
   let data_cache = destination.join(".data");
   trace!("creating {:?}", encrypted_metadata_file);
   let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
