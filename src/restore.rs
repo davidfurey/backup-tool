@@ -108,27 +108,34 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   let temporary_data_dir = destination.join(".data");
   create_dir_all(&temporary_data_dir).unwrap();
 
-  let metadata_bucket = store.metadata_bucket().await;
-  let data_bucket = store.init().await;
-  let encrypted_metadata_file = destination.join(".data/metadata");
-  let metadata_file = destination.join(".data/metadata.sqlite");
-  let data_cache = destination.join(".data");
-  trace!("creating {:?}", encrypted_metadata_file);
-  let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
-  metadata_bucket.download(format!("{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+  let key = &Cert::from_file(key_file).unwrap();
   
-  let key = Cert::from_file(key_file).unwrap();
-  let mut source = File::open(&encrypted_metadata_file).unwrap();
-  let mut dest = File::create(&metadata_file).unwrap();
-  decryption::decrypt_file(&mut source, &mut dest, &key).unwrap();
+  let metadata_file = destination.join(".data/metadata.sqlite");
+
+  {
+    let encrypted_metadata_file = destination.join(".data/metadata");
+    
+    trace!("creating {:?}", encrypted_metadata_file);
+    
+    {
+      let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
+      let metadata_bucket = store.metadata_bucket().await;
+      metadata_bucket.download(format!("{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+    }
+    
+    {
+      let mut source = File::open(&encrypted_metadata_file).unwrap();
+      let mut dest = File::create(&metadata_file).unwrap();
+      decryption::decrypt_file(&mut source, &mut dest, &key).unwrap();
+    }
+  }
 
   let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
 
+  let data_cache = &destination.join(".data");
   trace!("Destination: {:?}", destination.as_path());
   let destination = &destination;
-  let data_bucket = &data_bucket;
-  let data_cache = &data_cache;
-  let key = &key;
+  let data_bucket = &store.init().await;
   metadata_reader.read().await
     .map(|entry| async move {
       process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key).await
