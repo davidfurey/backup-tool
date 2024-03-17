@@ -39,10 +39,15 @@ impl MetadataReader {
       .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
       .read_only(true)
       .filename(filename);
-    MetadataReader {
+    let reader = MetadataReader {
       pool: SqlitePool::connect_with(options).await.unwrap()
+    };
+    let result = reader.pool.fetch_one(sqlx::query("SELECT value FROM metadata where key = 'version';")).await.unwrap();
+    let version: String = result.get(0);
+    if version != "0" {
+      panic!("Version is not supported")
     }
-    // todo: check if schema matches expected
+    reader
   }
 
   pub async fn read(&self) -> futures_core::stream::BoxStream<FileMetadata> {
@@ -73,6 +78,8 @@ impl MetadataWriter {
       pool: SqlitePool::connect_with(options).await.unwrap()
     };
     metadata_file.pool.execute(sqlx::query("CREATE TABLE files (id INTEGER PRIMARY KEY, name TEXT, mtime INTEGER, mode INTEGER, ttype STRING, destination STRING NULL, data_hash STRING NULL);")).await.unwrap();
+    metadata_file.pool.execute(sqlx::query("CREATE TABLE metadata (key TEXT, value TEXT);")).await.unwrap();
+    metadata_file.pool.execute(sqlx::query("INSERT INTO metadata (key, value) VALUES('version', '0');")).await.unwrap();
     metadata_file
   }
 
