@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::path::PathBuf;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use sequoia_openpgp::Cert;
@@ -25,6 +26,37 @@ async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, Buck
     }
     buckets
   }).await.unwrap()
+}
+
+async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore>, multi_progress: &MultiProgress) {
+  let style =
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
+      .unwrap()
+      .progress_chars("#>-");
+
+  for store in stores.iter() {
+    let metadata_file = std::fs::File::open(&filename).unwrap();
+
+    let pb = multi_progress.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
+      .with_finish(ProgressFinish::AndLeave);
+    pb.set_style(style.clone());
+    pb.set_message(format!("{}", &key));
+    pb.set_prefix("[Upload] ");
+
+    let callback = move |bytes: usize| {
+        pb.inc(u64::try_from(bytes).unwrap_or(0));
+        if pb.is_finished() {
+            //pb.finish_and_clear();
+        }
+    };
+
+    store
+      .metadata_bucket()
+      .await
+      .upload_with_progress(&key, metadata_file, callback)
+      .await
+      .unwrap();
+  }
 }
 
 pub fn generate_name() -> String{
@@ -88,8 +120,8 @@ pub async fn run_backup(config: BackupConfig, name: String) {
       }
     }
     result.1
-  }).buffered(64).for_each(|x| async { // does for_each here mean that the buffered(64) is moot?
-    match x {
+  }).buffered(64).for_each(|file_metadata| async { // does for_each here mean that the buffered(64) is moot?
+    match file_metadata {
       Some(metadata) => {
         metadata_writer.write(&metadata).await.unwrap();
       },
@@ -105,34 +137,12 @@ pub async fn run_backup(config: BackupConfig, name: String) {
   {
     let mut source = File::open(&metadata_file).unwrap();
     let mut dest = File::create(&metadata_file_encrypted).unwrap();
-    let encrypting_key = Cert::from_file(config.encrypting_key_file.clone()).unwrap();
-    encryption::encrypt_file(&mut source, &mut dest, &encrypting_key).unwrap();
+    let cert = Cert::from_file(config.encrypting_key_file.clone()).unwrap();
+    encryption::encrypt_file(&mut source, &mut dest, &cert).unwrap();
   }
   std::fs::remove_file(&metadata_file).unwrap();
   
-  for store in config.stores.iter() {
-    let x = store.metadata_bucket().await;
-    let metadata_file = std::fs::File::open(&metadata_file_encrypted).unwrap();
-
-    let pb = multi_progress.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
-      .with_finish(ProgressFinish::AndLeave);
-    let style =
-          ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
-              .unwrap()
-              .progress_chars("#>-");
-
-    pb.set_style(style.clone());
-    pb.set_message(format!("{}", &metadata_filename_encrypted));
-    pb.set_prefix("[Upload] ");
-    let callback = move |bytes: usize| {
-        pb.inc(u64::try_from(bytes).unwrap_or(0));
-        if pb.is_finished() {
-            //pb.finish_and_clear();
-        }
-    };
-
-    x.upload_with_progress(&metadata_filename_encrypted, metadata_file, callback).await.unwrap();
-  }
+  upload_metadata(metadata_filename_encrypted, &metadata_file_encrypted, &config.stores, multi_progress).await;
   std::fs::remove_file(&metadata_file_encrypted).unwrap();
 
   cache.cleanup().await;
