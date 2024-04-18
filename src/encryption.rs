@@ -11,11 +11,12 @@ use openpgp::policy::Policy;
 use openpgp::policy::StandardPolicy as P;
 use openpgp::types::Timestamp;
 use openpgp::Cert;
+use log::trace;
 
-pub fn encrypt_file(source: &mut File, dest: &mut File, key: &Cert) -> openpgp::Result<()> {
+pub fn encrypt_file(source: &mut File, dest: &mut File, key: &Cert, signing_cert: Option<openpgp::Cert>) -> openpgp::Result<()> {
   let p = &P::new();
 
-  encrypt(p, source, dest, &key)?;
+  encrypt(p, source, dest, &key, signing_cert)?;
 
   Ok(())
 }
@@ -48,6 +49,7 @@ pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
 
     match signing_key {
         Some(v) => {
+            trace!("Signing backup");
             message = Signer::new(message, v.clone().into_keypair().expect("Key was unexpectedly encrypted")).build().unwrap();
         }
         None => {
@@ -67,7 +69,7 @@ pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
 }
 
 fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send + Sync),
-          recipient: &openpgp::Cert)
+          recipient: &openpgp::Cert, signing_cert: Option<openpgp::Cert>)
     -> openpgp::Result<()>
 {
     let recipients =
@@ -75,18 +77,39 @@ fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send
         .for_transport_encryption();
 
     // Start streaming an OpenPGP message.
-    let message = Message::new(sink);
+    let mut message = Message::new(sink);
 
     // We want to encrypt a literal data packet.
-    let message = Encryptor::for_recipients(message, recipients)
+    message = Encryptor::for_recipients(message, recipients)
         .build()?;
 
-    let message = Compressor::new(message)
+    message = Compressor::new(message)
       .algo(CompressionAlgorithm::Uncompressed) // todo: 13.5 seconds down to under 8 seconds ?? is it worth it
       .build()?;
 
+
+    let signing_key = signing_cert.as_ref().and_then(|x|
+        x.keys()
+            .with_policy(p, None).alive().revoked(false).for_signing().secret()
+            .filter(|ka| ka.has_unencrypted_secret())
+            .map(|ka| ka.key())
+            .next()
+    );
+
+    match signing_key {
+        Some(v) => {
+            trace!("Found signing key");
+            message = Signer::new(message, v.clone().into_keypair().expect("Key was unexpectedly encrypted")).build().unwrap();
+        }
+        None => {
+            if signing_cert.is_some() {
+                panic!("Unable to find appropriate signing keypair despite certificate being provided")
+            }
+        }
+    }
+
     // Emit a literal data packet.
-    let mut message = LiteralWriter::new(message)
+    message = LiteralWriter::new(message)
       .filename("foo")?
       .date(Timestamp::from(1585925313))?
       .build()?;

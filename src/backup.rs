@@ -138,7 +138,8 @@ pub async fn run_backup(config: BackupConfig, name: String) {
     let mut source = File::open(&metadata_file).unwrap();
     let mut dest = File::create(&metadata_file_encrypted).unwrap();
     let cert = Cert::from_file(config.encrypting_key_file.clone()).unwrap();
-    encryption::encrypt_file(&mut source, &mut dest, &cert).unwrap();
+    let signing_key = config.signing_key_file.clone().map(|x| Cert::from_file(x).unwrap());
+    encryption::encrypt_file(&mut source, &mut dest, &cert, signing_key).unwrap();
   }
   std::fs::remove_file(&metadata_file).unwrap();
   

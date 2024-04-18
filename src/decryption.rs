@@ -1,6 +1,7 @@
 use std::io::{self, Read, Write};
 
 extern crate sequoia_openpgp as openpgp;
+extern crate anyhow;
 
 use openpgp::crypto::SessionKey;
 use openpgp::types::SymmetricAlgorithm;
@@ -9,17 +10,20 @@ use openpgp::policy::Policy;
 use openpgp::policy::StandardPolicy as P;
 use std::fs::File;
 use openpgp::Cert;
+use log::trace;
 
 pub struct Decryption {
     policy: Box<dyn Policy>,
     recipient: openpgp::Cert,
+    valid_signers: Option<openpgp::Cert>,
 }
 
 impl Decryption {
-    pub fn new(recipient: openpgp::Cert) -> Decryption {
+    pub fn new(recipient: openpgp::Cert, valid_signers: Option<openpgp::Cert>) -> Decryption {
         Decryption {
             policy: Box::new(P::new()),
             recipient,
+            valid_signers,
         }
     }
 
@@ -33,16 +37,16 @@ impl Decryption {
     }
 }
 
-pub fn decrypt_file(source: &mut File, dest: &mut File, key: &Cert) -> openpgp::Result<()> {
-    decrypt(source, dest, &key)?;
+pub fn decrypt_file(source: &mut File, dest: &mut File, key: &Cert, valid_signers: Option<openpgp::Cert>) -> openpgp::Result<()> {
+    decrypt(source, dest, &key, valid_signers)?;
   
     Ok(())
   }
 
 fn decrypt(source: &mut (dyn Read + Send + Sync), sink: &mut (dyn Write + Send + Sync),
-  recipient: &openpgp::Cert) -> openpgp::Result<()> {
+  recipient: &openpgp::Cert, signing_cert: Option<openpgp::Cert>) -> openpgp::Result<()> {
 
-    let decryption = Decryption::new(recipient.clone());
+    let decryption = Decryption::new(recipient.clone(), signing_cert);
 
     let mut decrypted = decryption.decrypt(source);
 
@@ -54,16 +58,60 @@ fn decrypt(source: &mut (dyn Read + Send + Sync), sink: &mut (dyn Write + Send +
   
 
 impl VerificationHelper for &Decryption {
-    fn get_certs(&mut self, _ids: &[openpgp::KeyHandle])
+    fn get_certs(&mut self, ids: &[openpgp::KeyHandle])
                        -> openpgp::Result<Vec<openpgp::Cert>> {
         // Return public keys for signature verification here.
-        Ok(Vec::new())
+        trace!("get_certs {:?}", ids);
+        let mut certs = Vec::new();
+        match &self.valid_signers {
+            Some(valid_signer) => {
+                for id in ids {
+                    for subkey in valid_signer.keys() {
+                        if id == &subkey.key_handle() {
+                            trace!("Found cert");
+                            certs.push(valid_signer.clone());
+                        }
+                    }
+                }
+            },
+            None => {}
+        }
+        Ok(certs)
     }
 
-    fn check(&mut self, _structure: MessageStructure)
+    fn check(&mut self, structure: MessageStructure)
              -> openpgp::Result<()> {
-        // Implement your signature verification policy here.
-        Ok(())
+        for layer in structure.iter() {
+            match layer {
+                MessageLayer::Compression { algo } =>
+                    trace!("Compressed using {}", algo),
+                MessageLayer::Encryption { sym_algo, aead_algo } =>
+                    if let Some(aead_algo) = aead_algo {
+                        trace!("Encrypted and protected using {}/{}",
+                                    sym_algo, aead_algo);
+                    } else {
+                        trace!("Encrypted using {}", sym_algo);
+                    },
+                MessageLayer::SignatureGroup { ref results } =>
+                    for result in results {
+                        match result {
+                            Ok(GoodChecksum { ka, .. }) => {
+                                trace!("Good signature from {}", ka.cert());
+                                return Ok(())
+                            },
+                            Err(e) => {
+                                trace!("Error: {:?}", e);
+                                return Err(anyhow::anyhow!("No valid signature"));
+                            }
+                        }
+                    }
+            }
+        }
+        if self.valid_signers.is_none() {
+            return Ok(())
+        } else {
+            return Err(anyhow::anyhow!("No valid signature"));
+        }
     }
 }
 

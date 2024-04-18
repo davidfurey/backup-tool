@@ -78,7 +78,7 @@ pub async fn encryption_work(data_cache: &PathBuf, request: UploadRequest, key: 
         let mut source = fs::File::open(request.filename).unwrap();
         trace!("Creating {:?}\n", destination_filename);
         let mut dest = File::create(&destination_filename).unwrap();
-        encryption::encrypt_file(&mut source, &mut dest, &key).unwrap();
+        encryption::encrypt_file(&mut source, &mut dest, &key, None).unwrap();
         pb.finish_and_clear();
         let _ = send.send(UploadRequest { filename: destination_filename, data_hash: request.data_hash });
     });

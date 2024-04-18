@@ -5,7 +5,7 @@ use futures::{StreamExt, FutureExt};
 use log::{trace, error};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
-use crate::datastore;
+use crate::{datastore, hash};
 use datastore::DataStore;
 extern crate rmp_serde as rmps;
 use crate::metadata_file::FileMetadata;
@@ -18,7 +18,7 @@ use crate::swift::Bucket;
 use filetime::{set_file_mtime, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
 
-async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf) {
+async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String) {
   // todo: avoid repeating downloads
   // todo: verify hash matches expected
   
@@ -30,7 +30,7 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
     .take(4)
     .map(char::from)
     .collect();
-  let destination_filename = cache.join(format!("{}{}.gpg", data_hash, random_suffix));
+  let destination_filename = cache.join(format!("{}{}.gpg", data_hash, random_suffix)); // todo: probably need to do more to guarantee there isn't also a file with this name in the backup
   trace!("attempting to create {:?}", destination_filename);
   let encrypted_file = File::create(&destination_filename).unwrap();
   let key = format!("{}{}", data_prefix, data_hash);
@@ -40,11 +40,15 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
   trace!("downloaded {:?}", destination_filename);
   let mut source = File::open(&destination_filename).unwrap();
   let mut dest = File::create(&destination).unwrap();
-  decryption::decrypt_file(&mut source, &mut dest, cert).unwrap();
+  decryption::decrypt_file(&mut source, &mut dest, cert, None).unwrap();
+  if hash::data(&destination, hmac_secret) != data_hash { // todo: do not put file in correct location until this check is done
+    std::fs::remove_file(&destination).unwrap();
+    panic!("Data hash did not match for {:?}", destination);
+  }
   trace!("decrypted {:?}", destination);
 }
 
-pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert) -> i64 {
+pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String) -> i64 {
   let canonical_name =  Path::new(entry.name.as_str());
   let suffix = canonical_name.strip_prefix("/").unwrap();
   let path = destination.join(suffix);
@@ -66,7 +70,8 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
           &data_bucket, 
           data_prefix, 
           &key, 
-          &data_cache
+          &data_cache,
+          hmac_secret
         );
         let mtime = FileTime::from_unix_time(entry.mtime, 0);
         downloaded.map(move |f| {
@@ -96,7 +101,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
   }
 }
 
-pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf) {
+pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>) {
 
   if destination.exists() {
     error!("Bailing because destination already exists");
@@ -126,7 +131,8 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     {
       let mut source = File::open(&encrypted_metadata_file).unwrap();
       let mut dest = File::create(&metadata_file).unwrap();
-      decryption::decrypt_file(&mut source, &mut dest, &key).unwrap();
+      let signing_key = signing_key_file.clone().map(|x| Cert::from_file(x).unwrap());
+      decryption::decrypt_file(&mut source, &mut dest, &key, signing_key).unwrap();
     }
   }
 
@@ -138,7 +144,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   let data_bucket = &store.init().await;
   metadata_reader.read().await
     .map(|entry| async move {
-      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key).await
+      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key, hmac_secret).await
     })
     .buffer_unordered(4)
     .count()

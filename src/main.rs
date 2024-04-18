@@ -69,7 +69,9 @@ async fn main() {
                 PathBuf::from(destination),
                 name, 
                 config.stores.get(0).unwrap(),
-                config.encrypting_key_file
+                config.encrypting_key_file,
+                &config.hmac_secret,
+                &config.signing_key_file,
             ).await
         }
         Commands::List {} => {
