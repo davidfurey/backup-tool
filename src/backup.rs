@@ -14,6 +14,8 @@ use config::BackupConfig;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
 
+use crate::filetype;
+
 async fn init_datastore(store: &DataStore) -> (DataStore, Bucket, Bucket) {
   (store.clone(), store.init().await, store.metadata_bucket().await)
 }
@@ -69,6 +71,13 @@ pub fn generate_name() -> String{
   format!("backup-{}-{}", datetime, random_suffix)
 }
 
+struct Stats {
+  pub files: u64,
+  pub links: u64,
+  pub directories: u64,
+  pub uploaded: u64
+}
+
 pub async fn run_backup(config: BackupConfig, name: String) {
 
   let cache = AsyncCache::new().await;
@@ -92,7 +101,14 @@ pub async fn run_backup(config: BackupConfig, name: String) {
   use futures::StreamExt;
   let directory_stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(&config.source));
 
-  directory_stream
+  let empty_stats = Stats {
+    files: 0,
+    directories: 0,
+    links: 0,
+    uploaded: 0,
+  };
+  
+  let stats = directory_stream
     .enumerate()
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
@@ -101,7 +117,7 @@ pub async fn run_backup(config: BackupConfig, name: String) {
       },
       Err(_) => { (None, None) }
     };
-    match result.0 {
+    let uploaded = match result.0 {
       Some(upload_request) => {
         let requires_upload = cache.requires_upload(&upload_request.data_hash, &config.stores.to_vec()).await.unwrap();
         if !requires_upload.is_empty() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
@@ -114,18 +130,43 @@ pub async fn run_backup(config: BackupConfig, name: String) {
           let report = upload_worker::upload(upload_request2, &filtered_buckets, multi_progress).await;
           cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
           std::fs::remove_file(report.filename).unwrap();
+          true
+        } else {
+          false
+        }
+      },
+      _ => { false
+      }
+    };
+    (result.1, uploaded)
+  }).buffered(64).fold(empty_stats, |cur, file_metadata| async { // does for_each here mean that the buffered(64) is moot?
+    match file_metadata {
+      (Some(metadata), uploaded) => {
+        metadata_writer.write(&metadata).await.unwrap();
+        return match metadata.ttype {
+          filetype::FileType::FILE => { Stats {
+            files: cur.files + 1,
+            directories: cur.directories,
+            links: cur.links,
+            uploaded: cur.uploaded + if uploaded { 1 } else { 0 },
+          } },
+          filetype::FileType::SYMLINK => { Stats {
+            files: cur.files,
+            directories: cur.directories,
+            links: cur.links + 1,
+            uploaded: cur.uploaded,
+          } },
+          filetype::FileType::DIRECTORY => { Stats {
+            files: cur.files,
+            directories: cur.directories + 1,
+            links: cur.links,
+            uploaded: cur.uploaded,
+          } }
         }
       },
       _ => {
+        return cur;
       }
-    }
-    result.1
-  }).buffered(64).for_each(|file_metadata| async { // does for_each here mean that the buffered(64) is moot?
-    match file_metadata {
-      Some(metadata) => {
-        metadata_writer.write(&metadata).await.unwrap();
-      },
-      None => {}
     }
   }).await;
 
@@ -148,6 +189,10 @@ pub async fn run_backup(config: BackupConfig, name: String) {
 
   cache.cleanup().await;
   cache.close().await;
+
+  println!("Processed {} files, {} directories and {} symlinks", stats.files, stats.directories, stats.links);
+  println!("Uploaded: {:}", stats.uploaded);
+
   return ()
 
 }
