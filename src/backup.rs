@@ -61,6 +61,17 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
   }
 }
 
+fn humanise_bytes(b: u64) -> String {
+  if b > 1024*1024*1024 {
+    format!("{:.2}GiB", (b as f64) / (1024.0*1024.0*1024.0))
+  } else if b > 1024*1024 {
+    format!("{:.2}MiB", (b as f64) / (1024.0*1024.0))
+  } else if b > 1024 {
+    format!("{:.2}KiB", (b as f64) / 1024.0)
+  } else {
+    format!("{} bytes", b)
+  }
+}
 pub fn generate_name() -> String{
   let datetime = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
   let random_suffix: String = rand::thread_rng()
@@ -73,9 +84,11 @@ pub fn generate_name() -> String{
 
 struct Stats {
   pub files: u64,
+  pub unchanged_files: u64,
   pub links: u64,
   pub directories: u64,
-  pub uploaded: u64
+  pub uploaded: u64,
+  pub size: u64
 }
 
 pub async fn run_backup(config: BackupConfig, name: String) {
@@ -104,8 +117,10 @@ pub async fn run_backup(config: BackupConfig, name: String) {
   let empty_stats = Stats {
     files: 0,
     directories: 0,
+    unchanged_files: 0,
     links: 0,
     uploaded: 0,
+    size: 0
   };
   
   let stats = directory_stream
@@ -115,7 +130,7 @@ pub async fn run_backup(config: BackupConfig, name: String) {
       Ok(entry) => {
         hash_worker::hash_work(entry, index, &cache, &config.stores.to_vec(), &config.hmac_secret, &multi_progress).await
       },
-      Err(_) => { (None, None) }
+      Err(_) => { (None, None, false, 0) }
     };
     let uploaded = match result.0 {
       Some(upload_request) => {
@@ -138,29 +153,35 @@ pub async fn run_backup(config: BackupConfig, name: String) {
       _ => { false
       }
     };
-    (result.1, uploaded)
+    (result.1, result.2, result.3, uploaded)
   }).buffered(64).fold(empty_stats, |cur, file_metadata| async { // does for_each here mean that the buffered(64) is moot?
     match file_metadata {
-      (Some(metadata), uploaded) => {
+      (Some(metadata), hash_cached, size, uploaded) => {
         metadata_writer.write(&metadata).await.unwrap();
         return match metadata.ttype {
           filetype::FileType::FILE => { Stats {
             files: cur.files + 1,
             directories: cur.directories,
             links: cur.links,
+            unchanged_files: cur.unchanged_files + if hash_cached { 1 } else { 0 },
             uploaded: cur.uploaded + if uploaded { 1 } else { 0 },
+            size: cur.size + size,
           } },
           filetype::FileType::SYMLINK => { Stats {
             files: cur.files,
             directories: cur.directories,
             links: cur.links + 1,
+            unchanged_files: cur.unchanged_files,
             uploaded: cur.uploaded,
+            size: cur.size
           } },
           filetype::FileType::DIRECTORY => { Stats {
             files: cur.files,
             directories: cur.directories + 1,
             links: cur.links,
+            unchanged_files: cur.unchanged_files,
             uploaded: cur.uploaded,
+            size: cur.size
           } }
         }
       },
@@ -190,8 +211,9 @@ pub async fn run_backup(config: BackupConfig, name: String) {
   cache.cleanup().await;
   cache.close().await;
 
-  println!("Processed {} files, {} directories and {} symlinks", stats.files, stats.directories, stats.links);
+  println!("Processed {} files ({}), {} directories and {} symlinks", stats.files, humanise_bytes(stats.size), stats.directories, stats.links);
   println!("Uploaded: {:}", stats.uploaded);
+  println!("Unchanged: {:}", stats.unchanged_files);
 
   return ()
 

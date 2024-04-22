@@ -7,17 +7,21 @@ use filetype::FileType;
 use upload_worker::UploadRequest;
 
 
-pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress) -> (Option<UploadRequest>, Option<FileMetadata>) {
+pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
     let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
     let mut destination: Option<String> = None;
     let mut data_hash: Option<String> = None;
     let metadata = dir_entry.metadata().unwrap();
     let mut upload_request: Option<UploadRequest> = None;
+    let mut hash_cached = false;
     match file_type {
         Some(FileType::FILE) => {
             let cached_d_hash = cache.try_get_hash(dir_entry.path(), &metadata).await.unwrap();
             let d_hash = match cached_d_hash {
-                Some(h) => h,
+                Some(h) => {
+                    hash_cached = true;
+                    h
+                },
                 None => {
                     let hms = hmac_secret.clone();
                     let de = dir_entry.path().to_owned().clone();
@@ -76,5 +80,5 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCac
             data_hash,
         }
     });
-    (upload_request, file_metadata)
+    (upload_request, file_metadata, hash_cached, metadata.len())
 }
