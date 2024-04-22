@@ -1,4 +1,4 @@
-use std::os::unix::prelude::MetadataExt;
+use std::{os::unix::prelude::MetadataExt, fs::Metadata};
 use crate::{metadata_file::{self, FileMetadata}, upload_worker, datastore, sqlite_cache::AsyncCache, filetype, hash};
 use datastore::DataStore;
 use indicatif::{MultiProgress, ProgressStyle, ProgressBar};
@@ -6,8 +6,34 @@ use log::trace;
 use filetype::FileType;
 use upload_worker::UploadRequest;
 
+async fn generate_hash(dir_entry: &walkdir::DirEntry, cache: &AsyncCache, hmac_secret: &String, mp: &MultiProgress, metadata: &Metadata) -> String {
+    let hms = hmac_secret.clone();
+    let de = dir_entry.path().to_owned().clone();
+    let (send, recv) = tokio::sync::oneshot::channel();
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
+        .unwrap()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let mp = mp.clone();
 
-pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
+    let filename = format!("{:?}", dir_entry.file_name());
+    rayon::spawn(move || {
+        let pb = mp.add(ProgressBar::new_spinner());
+        pb.set_style(spinner_style.clone());
+        pb.set_prefix(format!("[Hash]"));
+        pb.inc(1);
+        pb.set_message(format!("{}", filename));
+        let res = hash::data(&de, &hms);
+        pb.finish_and_clear();
+        let _ = send.send(res);
+    });
+    let res = recv.await.expect("Panic in rayon::spawn");
+
+    let metadata_hash = hash::metadata(metadata.len(), metadata.mtime(), dir_entry.path());
+    cache.set_data_hash(&metadata_hash, &res).await.unwrap();
+    res
+}
+
+pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress, force_hash: bool) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
     let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
     let mut destination: Option<String> = None;
     let mut data_hash: Option<String> = None;
@@ -20,33 +46,18 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCac
             let d_hash = match cached_d_hash {
                 Some(h) => {
                     hash_cached = true;
-                    h
+                    if force_hash {
+                        let generated_hash = generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await;
+                        if generated_hash != h {
+                            eprintln!("Hash in cache does not match expected value for {:?}. Updated DB to match filesystem", dir_entry.file_name());
+                        }
+                        generated_hash
+                    } else {
+                        h
+                    }
                 },
                 None => {
-                    let hms = hmac_secret.clone();
-                    let de = dir_entry.path().to_owned().clone();
-                    let (send, recv) = tokio::sync::oneshot::channel();
-                    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
-                        .unwrap()
-                        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
-                    let mp = mp.clone();
-
-                    let filename = format!("{:?}", dir_entry.file_name());
-                    rayon::spawn(move || {
-                        let pb = mp.add(ProgressBar::new_spinner());
-                        pb.set_style(spinner_style.clone());
-                        pb.set_prefix(format!("[Hash]"));
-                        pb.inc(1);
-                        pb.set_message(format!("{}", filename));                
-                        let res = hash::data(&de, &hms);
-                        pb.finish_and_clear();
-                        let _ = send.send(res);
-                    });
-                    let res = recv.await.expect("Panic in rayon::spawn");
-                                        
-                    let metadata_hash = hash::metadata(metadata.len(), metadata.mtime(), dir_entry.path());
-                    cache.set_data_hash(&metadata_hash, &res).await.unwrap();
-                    res
+                    generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await
                 }
             };
             

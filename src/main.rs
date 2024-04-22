@@ -33,6 +33,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Backup {
+        #[arg(short, long, default_value_t = false)]
+        force_hash: bool,
     },
     Restore {
         name: String,
@@ -61,8 +63,8 @@ async fn main() {
     }));
 
     match &cli.command {
-        Commands::Backup {} => {
-            backup::run_backup(config, backup::generate_name()).await
+        Commands::Backup { force_hash } => {
+            backup::run_backup(config, backup::generate_name(), !!force_hash).await
         }
         Commands::Restore { name, destination } => {
             restore::restore_backup(

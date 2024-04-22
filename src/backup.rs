@@ -91,7 +91,7 @@ struct Stats {
   pub size: u64
 }
 
-pub async fn run_backup(config: BackupConfig, name: String) {
+pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool) {
 
   let cache = AsyncCache::new().await;
   cache.init().await;
@@ -128,7 +128,7 @@ pub async fn run_backup(config: BackupConfig, name: String) {
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
       Ok(entry) => {
-        hash_worker::hash_work(entry, index, &cache, &config.stores.to_vec(), &config.hmac_secret, &multi_progress).await
+        hash_worker::hash_work(entry, index, &cache, &config.stores.to_vec(), &config.hmac_secret, &multi_progress, force_hash).await
       },
       Err(_) => { (None, None, false, 0) }
     };
