@@ -13,6 +13,7 @@ use crate::{config, upload_worker, hash_worker, encryption};
 use config::BackupConfig;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
+use log::info;
 
 use crate::filetype;
 
@@ -91,7 +92,7 @@ struct Stats {
   pub size: u64
 }
 
-pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool) {
+pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool, dry_run: bool) {
 
   let cache = AsyncCache::new().await;
   cache.init().await;
@@ -134,17 +135,24 @@ pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool) {
     };
     let uploaded = match result.0 {
       Some(upload_request) => {
+        let x = upload_request.filename.clone();
+        let filename = x.to_string_lossy();
         let requires_upload = cache.requires_upload(&upload_request.data_hash, &config.stores.to_vec()).await.unwrap();
         if !requires_upload.is_empty() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
           // check here if it is encrypted on the filesystem?
           let key = Cert::from_file(&config.encrypting_key_file).unwrap();
           let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, multi_progress).await;
-          let filtered_buckets: Vec<&(DataStore, Bucket, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
-            buckets.iter().find(|bucket| bucket.0.id == *bucket_id)
-          }).collect();
-          let report = upload_worker::upload(upload_request2, &filtered_buckets, multi_progress).await;
-          cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
-          std::fs::remove_file(report.filename).unwrap();
+          if !dry_run {
+            let filtered_buckets: Vec<&(DataStore, Bucket, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
+              buckets.iter().find(|bucket| bucket.0.id == *bucket_id)
+            }).collect();
+            let report = upload_worker::upload(upload_request2, &filtered_buckets, multi_progress).await;
+            cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
+            std::fs::remove_file(report.filename).unwrap();
+          } else {
+            info!("Skipping upload of {}", filename);
+            std::fs::remove_file(upload_request2.filename).unwrap();
+          }
           true
         } else {
           false
@@ -205,7 +213,11 @@ pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool) {
   }
   std::fs::remove_file(&metadata_file).unwrap();
   
-  upload_metadata(metadata_filename_encrypted, &metadata_file_encrypted, &config.stores, multi_progress).await;
+  if !dry_run {
+    upload_metadata(metadata_filename_encrypted, &metadata_file_encrypted, &config.stores, multi_progress).await;
+  } else {
+    info!("Skipping upload of metadata")
+  }
   std::fs::remove_file(&metadata_file_encrypted).unwrap();
 
   cache.cleanup().await;

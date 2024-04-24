@@ -35,6 +35,8 @@ enum Commands {
     Backup {
         #[arg(short, long, default_value_t = false)]
         force_hash: bool,
+        #[arg(short, long, default_value_t = false)]
+        dry_run: bool,
     },
     Restore {
         name: String,
@@ -63,8 +65,8 @@ async fn main() {
     }));
 
     match &cli.command {
-        Commands::Backup { force_hash } => {
-            backup::run_backup(config, backup::generate_name(), !!force_hash).await
+        Commands::Backup { force_hash, dry_run } => {
+            backup::run_backup(config, backup::generate_name(), !!force_hash, !!dry_run).await
         }
         Commands::Restore { name, destination } => {
             restore::restore_backup(
