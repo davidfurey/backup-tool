@@ -13,6 +13,7 @@ pub mod backup;
 pub mod restore;
 pub mod list;
 pub mod query;
+pub mod rebuild_cache;
 
 use std::path::PathBuf;
 
@@ -82,7 +83,9 @@ async fn main() {
             list::list_backups(config.stores.get(0).unwrap()).await
         }
         Commands::Validate {} => { println!("Todo") }
-        Commands::RebuildCache {} => { println!("Todo") }
+        Commands::RebuildCache {} => {
+            rebuild_cache::rebuild_cache(config).await
+        }
     }
 // validate
 // rebuild-cache

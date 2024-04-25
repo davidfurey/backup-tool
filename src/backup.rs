@@ -38,6 +38,7 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
       .progress_chars("#>-");
 
   for store in stores.iter() {
+    // todo: key should be prefixes with store.metadata_prefix, right?
     let metadata_file = std::fs::File::open(&filename).unwrap();
 
     let pb = multi_progress.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))

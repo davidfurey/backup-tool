@@ -11,7 +11,7 @@ use query::Query;
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub struct ObjectEntry {
-  hash: String,
+  pub hash: String,
   last_modified: String,
   bytes: i128,
   pub name: String,
@@ -64,10 +64,24 @@ impl Bucket {
       tokio::io::copy(&mut reader, &mut tokio_file).await
     }
 
-    pub async fn list(&self, key: &str) -> std::io::Result<Vec<ObjectEntry>> {
+    pub async fn list(&self, prefix: Option<&str>, marker: Option<&str>) -> std::io::Result<Vec<ObjectEntry>> {
       let mut query = Query::new();
       query.push_str("format", "json");
-      let response = self.session.get(OBJECT_STORAGE, &[self.container.as_ref(), key])
+      query.push_str("limit", "100");
+      match prefix {
+        Some(p) => {
+          query.push_str("prefix", p);
+        },
+        _ => {}
+      };
+      match marker {
+        Some(m) => {
+          query.push_str("marker", m);
+        },
+        _ => {}
+      };
+
+      let response = self.session.get(OBJECT_STORAGE, &[self.container.as_ref(), ""])
         .query(&query)
         .send().await.unwrap()
         .json().await.unwrap();

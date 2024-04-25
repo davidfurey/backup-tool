@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 use sqlx;
 
 use log::error;
+use sqlx::sqlite::SqliteQueryResult;
 
 pub struct AsyncCache {
   pool: SqlitePool
@@ -34,6 +35,10 @@ impl AsyncCache {
     AsyncCache {
       pool: SqlitePool::connect_with(options).await.unwrap()
     }
+  }
+
+  pub async fn clear_cold_storage_cache(&self) -> Result<SqliteQueryResult, sqlx::Error> {
+    self.pool.execute(sqlx::query("DELETE FROM uploaded_objects;")).await
   }
 
   pub async fn set_data_in_cold_storage(&self, hash: &str, md5_hash: &str, store_ids: &Vec<i32>) -> Result<usize, String> {
