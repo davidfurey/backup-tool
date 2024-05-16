@@ -52,7 +52,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    let is_attended = console::user_attended_stderr();
+
     let logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(if is_attended { None } else { Some(Default::default()) })
+        .format_level(!is_attended)
+        .format_target(!is_attended)
         .build();
 
     let multi_progress = MultiProgress::new();
