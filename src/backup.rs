@@ -93,7 +93,7 @@ struct Stats {
   pub size: u64
 }
 
-pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool, dry_run: bool) {
+pub async fn run_backup(config: BackupConfig, name: String, multi_progress: MultiProgress, force_hash: bool, dry_run: bool) {
 
   let cache = AsyncCache::new().await;
   cache.init().await;
@@ -105,8 +105,6 @@ pub async fn run_backup(config: BackupConfig, name: String, force_hash: bool, dr
   };
   
   let metadata_writer = crate::metadata_file::MetadataWriter::new(metadata_file.clone()).await;
-
-  let multi_progress = MultiProgress::new();
 
   let config = &config;
   let cache = &cache;

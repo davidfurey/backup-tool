@@ -20,6 +20,8 @@ use std::path::PathBuf;
 use config::BackupConfig;
 
 use clap::{Parser, Subcommand};
+use indicatif::MultiProgress;
+use indicatif_log_bridge::LogWrapper;
 
 extern crate serde;
 #[macro_use]
@@ -50,7 +52,15 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    let logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .build();
+
+    let multi_progress = MultiProgress::new();
+
+    LogWrapper::new(multi_progress.clone(), logger)
+        .try_init()
+        .unwrap();
+
     console_subscriber::init();
     let cli = Cli::parse();
     let content = std::fs::read_to_string("backup.toml").unwrap();
@@ -67,7 +77,7 @@ async fn main() {
 
     match &cli.command {
         Commands::Backup { force_hash, dry_run } => {
-            backup::run_backup(config, backup::generate_name(), !!force_hash, !!dry_run).await
+            backup::run_backup(config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
         }
         Commands::Restore { name, destination } => {
             restore::restore_backup(

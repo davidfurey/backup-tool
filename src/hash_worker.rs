@@ -3,6 +3,7 @@ use crate::{metadata_file::{self, FileMetadata}, upload_worker, datastore, sqlit
 use datastore::DataStore;
 use indicatif::{MultiProgress, ProgressStyle, ProgressBar};
 use log::trace;
+use log::warn;
 use filetype::FileType;
 use upload_worker::UploadRequest;
 
@@ -49,7 +50,7 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCac
                     if force_hash {
                         let generated_hash = generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await;
                         if generated_hash != h {
-                            eprintln!("Hash in cache does not match expected value for {:?}. Updated DB to match filesystem", dir_entry.file_name());
+                            warn!("Hash in cache does not match expected value for {:?}. Updated DB to match filesystem", dir_entry.file_name());
                         }
                         generated_hash
                     } else {
