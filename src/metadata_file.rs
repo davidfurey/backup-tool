@@ -50,6 +50,14 @@ impl MetadataReader {
     reader
   }
 
+  pub async fn read_metadata(&self, key: &str) -> String {
+    let result = self.pool.fetch_one(
+      sqlx::query("SELECT value FROM metadata where key = ?;")
+        .bind(key)
+    ).await.unwrap();
+    result.get(0)
+  }
+
   pub async fn read(&self) -> futures_core::stream::BoxStream<FileMetadata> {
     use futures::StreamExt;
     let query = sqlx::query("SELECT id, name, mtime, mode, ttype, destination, data_hash from files order by id asc;");
@@ -94,6 +102,14 @@ impl MetadataWriter {
       .bind(entry.data_hash.clone());
     let id = self.pool.execute(query).await?.last_insert_rowid();
     Ok(id)
+  }
+
+  pub async fn write_metadata(&self, key: &str, value: &str) {
+    self.pool.execute(
+      sqlx::query("INSERT INTO metadata (key, value) VALUES(?, ?);")
+        .bind(key)
+        .bind(value)
+    ).await.unwrap();
   }
 
   pub async fn close(&self) -> () {

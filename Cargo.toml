@@ -42,3 +42,4 @@ indicatif-log-bridge = "0.2.2"
 rayon = "1.8.1"
 strum = { version = "0.26.1", features = ["derive"] }
 anyhow = "1.0"
+fs2 = "0.4.3"

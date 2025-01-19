@@ -1,8 +1,9 @@
 use std::os::unix::prelude::PermissionsExt;
 use std::path::{PathBuf, Path};
+use std::ptr::metadata;
 
 use futures::{StreamExt, FutureExt};
-use log::{trace, error};
+use log::{trace, error, info};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use crate::{datastore, hash};
@@ -15,8 +16,10 @@ use std::os::unix::fs::symlink;
 use crate::filetype;
 use filetype::FileType;
 use crate::swift::Bucket;
+use crate::utils::humanise_bytes;
 use filetime::{set_file_mtime, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
+use fs2::free_space;
 
 async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String) {
   // todo: avoid repeating downloads
@@ -137,6 +140,14 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   }
 
   let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+
+  let size: u64 = metadata_reader.read_metadata("size").await.parse().unwrap();
+  info!("Backup is {}", humanise_bytes(size));
+
+  let available_space = free_space(destination.as_path()).unwrap();
+  if (available_space < size) {
+    panic!("Backup is {} but disk only has {} available space", humanise_bytes(size), humanise_bytes(available_space));
+  }
 
   let data_cache = &destination.join(".data");
   trace!("Destination: {:?}", destination.as_path());

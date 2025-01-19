@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
+use tokio::fs::metadata;
 use walkdir::WalkDir;
 
 use crate::datastore::DataStore;
@@ -16,6 +17,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use log::info;
 
 use crate::filetype;
+use crate::utils::humanise_bytes;
 
 async fn init_datastore(store: &DataStore) -> (DataStore, Bucket, Bucket) {
   (store.clone(), store.init().await, store.metadata_bucket().await)
@@ -63,17 +65,6 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
   }
 }
 
-fn humanise_bytes(b: u64) -> String {
-  if b > 1024*1024*1024 {
-    format!("{:.2}GiB", (b as f64) / (1024.0*1024.0*1024.0))
-  } else if b > 1024*1024 {
-    format!("{:.2}MiB", (b as f64) / (1024.0*1024.0))
-  } else if b > 1024 {
-    format!("{:.2}KiB", (b as f64) / 1024.0)
-  } else {
-    format!("{} bytes", b)
-  }
-}
 pub fn generate_name() -> String{
   let datetime = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
   let random_suffix: String = rand::thread_rng()
@@ -198,6 +189,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
     }
   }).await;
 
+  metadata_writer.write_metadata("size", stats.size.to_string().as_str()).await;
   metadata_writer.close().await;
 
   let metadata_filename_encrypted = format!("{}.metadata", name);

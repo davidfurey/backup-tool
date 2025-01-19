@@ -14,6 +14,7 @@ pub mod restore;
 pub mod list;
 pub mod query;
 pub mod rebuild_cache;
+pub mod utils;
 
 use std::path::PathBuf;
 
