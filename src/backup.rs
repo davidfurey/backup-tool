@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
-use tokio::fs::metadata;
 use walkdir::WalkDir;
 
 use crate::datastore::DataStore;

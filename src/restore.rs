@@ -1,6 +1,5 @@
 use std::os::unix::prelude::PermissionsExt;
 use std::path::{PathBuf, Path};
-use std::ptr::metadata;
 
 use futures::{StreamExt, FutureExt};
 use log::{trace, error, info};
@@ -145,7 +144,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   info!("Backup is {}", humanise_bytes(size));
 
   let available_space = free_space(destination.as_path()).unwrap();
-  if (available_space < size) {
+  if available_space < size {
     panic!("Backup is {} but disk only has {} available space", humanise_bytes(size), humanise_bytes(available_space));
   }
 
