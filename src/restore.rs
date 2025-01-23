@@ -127,7 +127,8 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     {
       let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
       let metadata_bucket = store.metadata_bucket().await;
-      metadata_bucket.download(format!("{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+      let prefix = &store.metadata_prefix;
+      metadata_bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
     }
     
     {

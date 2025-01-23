@@ -39,7 +39,6 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
       .progress_chars("#>-");
 
   for store in stores.iter() {
-    // todo: key should be prefixes with store.metadata_prefix, right?
     let metadata_file = std::fs::File::open(&filename).unwrap();
 
     let pb = multi_progress.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
@@ -55,10 +54,12 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
         }
     };
 
+    let combined_key = format!("{}{}", store.metadata_prefix, key);
+
     store
       .metadata_bucket()
       .await
-      .upload_with_progress(&key, metadata_file, callback)
+      .upload_with_progress(&combined_key, metadata_file, callback)
       .await
       .unwrap();
   }
