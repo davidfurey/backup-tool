@@ -33,7 +33,7 @@ pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
     let mut message = Message::new(sink);
 
     // We want to encrypt a literal data packet.
-    message = Encryptor::for_recipients(message, recipients)
+    message = Encryptor2::for_recipients(message, recipients)
         .build()?;
 
     message = Compressor::new(message)
@@ -80,7 +80,7 @@ fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send
     let mut message = Message::new(sink);
 
     // We want to encrypt a literal data packet.
-    message = Encryptor::for_recipients(message, recipients)
+    message = Encryptor2::for_recipients(message, recipients)
         .build()?;
 
     message = Compressor::new(message)
