@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.78.0
+FROM rust:1.84.0
 
 COPY ./ /root/backup-tool
 
