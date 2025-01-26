@@ -28,7 +28,7 @@ impl Decryption {
     }
 
     pub fn decrypt<'a>(&'a self, ciphertext: &'a mut (dyn Read + Send + Sync))
-        -> Decryptor<'a, &Decryption> {
+        -> Decryptor<'a, &'a Decryption> {
     
         DecryptorBuilder::from_reader(ciphertext)
             .unwrap()
