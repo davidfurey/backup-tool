@@ -14,11 +14,10 @@ sequoia-openpgp = "1.16.0"
 rmp-serde = "1.1.0"
 serde = "1.0.137"
 serde_derive = "1.0.137"
-# openstack = { git = "https://github.com/dtantsur/rust-openstack" }
-openstack = { version = "^0.5" }
+openstack = { git = "https://github.com/dtantsur/rust-openstack" }
 #osauth = { git = "https://github.com/dtantsur/rust-osauth", rev = "0ea8be6750b439b9a129500a62d427f49d57280d" } # why was this pinned?
 # osauth = { git = "https://github.com/dtantsur/rust-osauth", rev = "065975e0d73744bd28802b6b03c8f57263cf6a77" }
-osauth = { version = "^0.4" }
+osauth = { git = "https://github.com/dtantsur/rust-osauth" }
 walkdir = "2.3.2"
 crossbeam-channel = "0.5.5"
 hmac = "0.12.1"
