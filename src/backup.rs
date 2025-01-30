@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{create_dir_all, File};
 use std::path::PathBuf;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
@@ -89,6 +89,9 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
   let cache = AsyncCache::new().await;
   cache.init().await;
   let buckets = init_datastores(config.stores.to_vec()).await;
+
+  create_dir_all(config.metadata_cache.as_path()).unwrap();
+  create_dir_all(config.data_cache.as_path()).unwrap();
 
   let metadata_file = {
     let metadata_filename = format!("{}.metadata.sqlite", name);
