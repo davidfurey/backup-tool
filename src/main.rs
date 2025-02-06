@@ -67,6 +67,7 @@ async fn main() {
         .try_init()
         .unwrap();
 
+    #[cfg(feature = "console")]
     console_subscriber::init();
     let cli = Cli::parse();
     let content = std::fs::read_to_string("backup.toml").unwrap();
