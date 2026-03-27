@@ -21,36 +21,39 @@ use fs2::free_space;
 
 async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String) {
   // todo: avoid repeating downloads
-  // todo: verify hash matches expected
-  
-  // this is to avoid the risk of two threads downloading the same data blog at the same time and stepping on eachothers toes.
-  // based on the highly scientific process of restoring a backup 10 times and seeing a race condition happen >5 times, and restoring 10 times with
-  // no errors after this change, it seems to work.
-  let random_suffix: String = rand::thread_rng() 
+
+  // Use a short random suffix so that concurrent tasks downloading the same
+  // hash don't collide on the temp filenames.
+  let random_suffix: String = rand::thread_rng()
     .sample_iter(&Alphanumeric)
     .take(4)
     .map(char::from)
     .collect();
-  let destination_filename = cache.join(format!("{}{}.gpg", data_hash, random_suffix)); // todo: probably need to do more to guarantee there isn't also a file with this name in the backup
-  trace!("attempting to create {:?}", destination_filename);
-  let encrypted_file = File::create(&destination_filename).unwrap();
-  let key = format!("{}{}", data_prefix, data_hash);
-  trace!("downloading {:?}", destination_filename);
+  let encrypted_temp = cache.join(format!("{}{}.gpg", data_hash, random_suffix));
+  let decrypted_temp = cache.join(format!("{}{}.plain", data_hash, random_suffix));
 
+  trace!("downloading {:?}", encrypted_temp);
+  let encrypted_file = File::create(&encrypted_temp).unwrap();
+  let key = format!("{}{}", data_prefix, data_hash);
   bucket.download(key.as_str(), encrypted_file).await.unwrap();
-  trace!("downloaded {:?}", destination_filename);
-  let mut source = File::open(&destination_filename).unwrap();
+  trace!("downloaded {:?}", encrypted_temp);
+
+  // Decrypt into a temp file so the final path only appears once the hash
+  // check has passed.
   {
-    let mut dest = File::create(&destination).unwrap();
+    let mut source = File::open(&encrypted_temp).unwrap();
+    let mut dest = File::create(&decrypted_temp).unwrap();
     decryption::decrypt_file(&mut source, &mut dest, cert, None).unwrap();
   }
-  drop(source);
-  std::fs::remove_file(&destination_filename).unwrap();
-  if hash::data(&destination, hmac_secret) != data_hash { // todo: do not put file in correct location until this check is done
-    std::fs::remove_file(&destination).unwrap();
+  std::fs::remove_file(&encrypted_temp).unwrap();
+
+  if hash::data(&decrypted_temp, hmac_secret) != data_hash {
+    std::fs::remove_file(&decrypted_temp).unwrap();
     panic!("Data hash did not match for {:?}", destination);
   }
-  trace!("decrypted {:?}", destination);
+
+  std::fs::rename(&decrypted_temp, &destination).unwrap();
+  trace!("restored {:?}", destination);
 }
 
 pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String) -> i64 {
