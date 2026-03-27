@@ -18,18 +18,18 @@ use log::info;
 use crate::filetype;
 use crate::utils::humanise_bytes;
 
-async fn init_datastore(store: &DataStore) -> (DataStore, Bucket, Bucket) {
-  (store.clone(), store.init().await, store.metadata_bucket().await)
-}
-
 async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, Bucket)> {
-  tokio::task::spawn(async move {
-    let mut buckets: Vec<(DataStore, Bucket, Bucket)> = Vec::new();
-    for bucket in stores.iter() {
-      buckets.push(init_datastore(bucket).await)
-    }
-    buckets
-  }).await.unwrap()
+  use futures::StreamExt;
+  let n = stores.len().max(1);
+  futures::stream::iter(stores)
+    .map(|store| async move {
+      let bucket = store.init().await;
+      let metadata_bucket = store.metadata_bucket().await;
+      (store, bucket, metadata_bucket)
+    })
+    .buffer_unordered(n)
+    .collect()
+    .await
 }
 
 async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore>, multi_progress: &MultiProgress) {
