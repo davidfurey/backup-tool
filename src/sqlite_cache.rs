@@ -80,7 +80,7 @@ impl AsyncCache {
     }
   }
 
-  pub async fn requires_upload(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<Vec<i32>, sqlx::Error> { //todo: this should return a list of stores that don't have the data
+  pub async fn requires_upload(&self, data_hash: &String, stores: &Vec<DataStore>) -> Result<Vec<i32>, sqlx::Error> {
     let query = sqlx::query("SELECT datastore_id FROM uploaded_objects WHERE data_hash = ?")
       .bind(data_hash);
 
