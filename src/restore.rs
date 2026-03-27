@@ -93,9 +93,8 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
       FileType::SYMLINK => {
         trace!("Creating symlink {:?} -> {:?}", &path, entry.destination);
         symlink(entry.destination.clone().unwrap(), &path).unwrap();
-        // todo?
-        //let permissions = PermissionsExt::from_mode(entry.mode);
-        //set_permissions(&path, permissions).unwrap();
+        // Symlink permissions are not meaningful on Linux (always rwxrwxrwx)
+        // and cannot be set via std::fs::set_permissions.
         1
       }
       FileType::DIRECTORY => {
