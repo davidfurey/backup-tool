@@ -110,6 +110,7 @@ async fn main() {
                 &config.stores,
                 config.encrypting_key_file,
                 &config.signing_key_file,
+                multi_progress,
             ).await
         }
         Commands::RebuildCache {} => {

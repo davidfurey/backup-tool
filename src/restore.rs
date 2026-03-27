@@ -125,7 +125,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
   }
 }
 
-pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>) {
+pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
   let first_store = stores.first().expect("At least one store is required");
 
   // Temp dir for the metadata file — cleaned up at the end.
@@ -158,6 +158,15 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   }
 
   let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+
+  let checker_pb = mp.add(ProgressBar::new_spinner());
+  checker_pb.set_style(
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {pos} files checked{msg}")
+      .unwrap()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+  );
+  checker_pb.set_prefix("[Validate]");
+  checker_pb.enable_steady_tick(Duration::from_millis(80));
 
   // Initialise one data bucket per store up-front to avoid re-authenticating
   // for every file. Wrapped in Arc so the shared reference can be moved into
@@ -192,16 +201,19 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
       }
     })
     .buffer_unordered(16)
-    .fold((0u64, 0u64), |acc, (t, m)| futures::future::ready((acc.0 + t, acc.1 + m)))
+    .fold((0u64, 0u64), |acc, (t, m)| {
+      checker_pb.inc(1);
+      futures::future::ready((acc.0 + t, acc.1 + m))
+    })
     .await;
 
   remove_dir_all(&tmp_dir).unwrap();
 
   if missing == 0 {
-    info!("Validation passed: {} files checked across {} store(s)", total_files, stores.len());
+    checker_pb.finish_with_message(format!(" — passed ({} store(s))", stores.len()));
   } else {
     let total_checks = total_files * stores.len() as u64;
-    error!("Validation FAILED: {}/{} objects missing", missing, total_checks);
+    checker_pb.finish_with_message(format!(" — FAILED: {}/{} missing", missing, total_checks));
   }
 }
 
