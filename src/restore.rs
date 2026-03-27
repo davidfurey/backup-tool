@@ -116,16 +116,23 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   }
 
   // todo: same progress meters as backup
-  // todo: should we make this filename less likely to be something that might be included in an actual backup? Random perhaps?
-  let temporary_data_dir = destination.join(".data");
+
+  // Use a random suffix for the temp dir so it cannot collide with a
+  // top-level ".data" path that happens to be present in the backup itself.
+  let tmp_suffix: String = rand::thread_rng()
+    .sample_iter(&Alphanumeric)
+    .take(8)
+    .map(char::from)
+    .collect();
+  let temporary_data_dir = destination.join(format!(".backup-tmp-{}", tmp_suffix));
   create_dir_all(&temporary_data_dir).unwrap();
 
   let key = &Cert::from_file(key_file).unwrap();
   
-  let metadata_file = destination.join(".data/metadata.sqlite");
+  let metadata_file = temporary_data_dir.join("metadata.sqlite");
 
   {
-    let encrypted_metadata_file = destination.join(".data/metadata");
+    let encrypted_metadata_file = temporary_data_dir.join("metadata");
     
     trace!("creating {:?}", encrypted_metadata_file);
     
@@ -154,7 +161,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     panic!("Backup is {} but disk only has {} available space", humanise_bytes(size), humanise_bytes(available_space));
   }
 
-  let data_cache = &destination.join(".data");
+  let data_cache = &temporary_data_dir;
   trace!("Destination: {:?}", destination.as_path());
   let destination = &destination;
   let data_bucket = &store.init().await;
