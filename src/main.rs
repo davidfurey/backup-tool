@@ -30,6 +30,8 @@ extern crate serde_derive;
 
 #[derive(Parser)]
 struct Cli {
+    #[arg(short, long, default_value = "backup.toml")]
+    config: PathBuf,
     #[command(subcommand)]
     command: Commands,
 }
@@ -70,7 +72,7 @@ async fn main() {
     #[cfg(feature = "console")]
     console_subscriber::init();
     let cli = Cli::parse();
-    let content = std::fs::read_to_string("backup.toml").unwrap();
+    let content = std::fs::read_to_string(&cli.config).unwrap();
     let config: BackupConfig = toml::from_str(&content).unwrap();
 
 
