@@ -39,17 +39,19 @@ pub async fn upload(request: UploadRequest, buckets: &Vec<&(DataStore, Bucket, B
         pb.set_style(style.clone());
         pb.set_message(format!("{}", &request.data_hash[..16]));
         pb.set_prefix("[Upload] ");
+        // Clone the handle so the callback can own one copy while we retain
+        // another for finish_and_clear() after the upload.
+        let pb_callback = pb.clone();
         let callback = move |bytes: usize| {
-            pb.inc(u64::try_from(bytes).unwrap_or(0));
-            if pb.is_finished() {
-                pb.finish_and_clear(); // todo: is this required?
-            }
+            pb_callback.inc(u64::try_from(bytes).unwrap_or(0));
         };
         match bucket.upload_with_progress(&key, encrypted_file, callback).await {
             Ok(_) => {
+                pb.finish_and_clear();
                 success_ids.push(store.id);
             },
-            _ => {
+            Err(_) => {
+                pb.abandon_with_message("upload failed");
                 error!("Failed to upload {:?} to {:?}\n", request.data_hash, store.id)
             }
         }
