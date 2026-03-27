@@ -98,6 +98,7 @@ async fn main() {
                 config.encrypting_key_file,
                 &config.hmac_secret,
                 &config.signing_key_file,
+                multi_progress,
             ).await
         }
         Commands::List {} => {

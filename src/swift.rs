@@ -55,6 +55,24 @@ impl Bucket {
         }
     }
 
+    pub async fn download_with_progress(&self, key: &str, dest: File, callback: impl Fn(usize) + Sync + Send + 'static) -> std::io::Result<u64> {
+      let response = self.session.get(OBJECT_STORAGE, &[self.container.as_ref(), key]).send().await.unwrap();
+      let stream = response
+        .bytes_stream()
+        .map(move |result| {
+            result.map(|bytes| {
+                callback(bytes.len());
+                bytes
+            }).map_err(|_error| {
+                error!("Encountered error");
+                std::io::Error::new(std::io::ErrorKind::Other, "Error!")
+            })
+        });
+      let mut reader = StreamReader::new(stream);
+      let mut tokio_file = tokio::fs::File::from(dest);
+      tokio::io::copy(&mut reader, &mut tokio_file).await
+    }
+
     pub async fn download(&self, key: &str, dest: File) -> std::io::Result<u64> {
       let response = self.session.get(OBJECT_STORAGE, &[self.container.as_ref(), key]).send().await.unwrap();
       let stream = response

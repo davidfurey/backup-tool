@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::os::unix::prelude::PermissionsExt;
+use std::time::Duration;
 use std::path::{PathBuf, Path};
 
 use futures::{StreamExt, FutureExt};
@@ -16,11 +17,12 @@ use crate::filetype;
 use filetype::FileType;
 use crate::swift::Bucket;
 use crate::utils::humanise_bytes;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use filetime::{set_file_mtime, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
 use fs2::free_space;
 
-async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String) {
+async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String, mp: &MultiProgress) {
   // todo: avoid repeating downloads
 
   // Use a short random suffix so that concurrent tasks downloading the same
@@ -33,10 +35,23 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
   let encrypted_temp = cache.join(format!("{}{}.gpg", data_hash, random_suffix));
   let decrypted_temp = cache.join(format!("{}{}.plain", data_hash, random_suffix));
 
-  trace!("downloading {:?}", encrypted_temp);
+  let pb = mp.add(ProgressBar::new_spinner());
+  pb.set_style(
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} ({bytes} downloaded)")
+      .unwrap()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+  );
+  pb.set_prefix("[Download]");
+  pb.set_message(data_hash[..16].to_string());
+  pb.enable_steady_tick(Duration::from_millis(80));
+
   let encrypted_file = File::create(&encrypted_temp).unwrap();
   let key = format!("{}{}", data_prefix, data_hash);
-  bucket.download(key.as_str(), encrypted_file).await.unwrap();
+  let pb_cb = pb.clone();
+  bucket.download_with_progress(key.as_str(), encrypted_file, move |bytes| {
+    pb_cb.inc(bytes as u64);
+  }).await.unwrap();
+  pb.finish_and_clear();
   trace!("downloaded {:?}", encrypted_temp);
 
   // Decrypt into a temp file so the final path only appears once the hash
@@ -57,7 +72,7 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
   trace!("restored {:?}", destination);
 }
 
-pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String) -> i64 {
+pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String, mp: &MultiProgress) -> i64 {
   let canonical_name =  Path::new(entry.name.as_str());
   let suffix = canonical_name.strip_prefix("/").unwrap();
   let path = destination.join(suffix);
@@ -80,7 +95,8 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
           data_prefix, 
           &key, 
           &data_cache,
-          hmac_secret
+          hmac_secret,
+          mp,
         );
         let mtime = FileTime::from_unix_time(entry.mtime, 0);
         downloaded.map(move |f| {
@@ -189,14 +205,12 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   }
 }
 
-pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>) {
+pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
 
   if destination.exists() {
     error!("Bailing because destination already exists");
     return;
   }
-
-  // todo: same progress meters as backup
 
   // Use a random suffix for the temp dir so it cannot collide with a
   // top-level ".data" path that happens to be present in the backup itself.
@@ -242,16 +256,29 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     panic!("Backup is {} but disk only has {} available space", humanise_bytes(size), humanise_bytes(available_space));
   }
 
+  let counter_pb = mp.add(ProgressBar::new_spinner());
+  counter_pb.set_style(
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {pos} files restored")
+      .unwrap()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+  );
+  counter_pb.set_prefix("[Restore]");
+  counter_pb.enable_steady_tick(Duration::from_millis(80));
+
   let data_cache = &temporary_data_dir;
   trace!("Destination: {:?}", destination.as_path());
   let destination = &destination;
   let data_bucket = &store.init().await;
+  let mp_ref = &mp;
+  let counter_inc = counter_pb.clone();
   metadata_reader.read().await
     .map(|entry| async move {
-      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key, hmac_secret).await
+      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key, hmac_secret, mp_ref).await
     })
     .buffer_unordered(4)
-    .count()
+    .for_each(|_| { counter_inc.inc(1); futures::future::ready(()) })
     .await;
+
+  counter_pb.finish_with_message("done");
   remove_dir_all(&temporary_data_dir).unwrap();
 }
