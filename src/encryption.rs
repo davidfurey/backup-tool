@@ -53,7 +53,7 @@ pub fn encryptor<'a>(p: &'a dyn Policy, sink: &'a mut (dyn Write + Send + Sync),
             message = Signer::new(message, v.clone().into_keypair().expect("Key was unexpectedly encrypted")).build().unwrap();
         }
         None => {
-            if signing_key.is_some() {
+            if signing_cert.is_some() {
                 panic!("Unable to find appropriate signing keypair despite certificate being provided")
             }
         }
