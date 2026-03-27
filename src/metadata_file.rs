@@ -1,16 +1,9 @@
-use serde::Serialize;
-extern crate rmp_serde as rmps;
 use crate::filetype;
 use filetype::FileType;
 use sqlx::Executor;
 use sqlx::SqlitePool;
 use sqlx;
 use sqlx::Row;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct FileData {
-    pub data: Vec<FileMetadata>,
-}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FileMetadata {

@@ -7,7 +7,6 @@ use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use crate::{datastore, hash};
 use datastore::DataStore;
-extern crate rmp_serde as rmps;
 use crate::metadata_file::FileMetadata;
 use crate::decryption;
 use std::fs::{File, set_permissions, create_dir_all, remove_dir_all};

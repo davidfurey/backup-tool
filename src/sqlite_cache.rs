@@ -126,23 +126,6 @@ impl AsyncCache {
       }).await
   }
 
-  pub async fn get_hash(&self, path: &Path, metadata: &Metadata, hmac_secret: &str) -> Result<String, sqlx::Error> {
-    use futures::TryFutureExt;
-    let metadata_hash = hash::metadata(metadata.len(), metadata.mtime(), path);
-
-    self.mark_used_and_lookup_hash(&metadata_hash)
-      .and_then(|v| async {
-        match v {
-          Some(s) => return Ok(s),
-          None => {
-              let data_hash = hash::data(path, hmac_secret);
-              self.set_data_hash(&metadata_hash, &data_hash).await.unwrap();
-              Ok(data_hash)
-          }
-        }
-      }).await
-  }
-
   async fn mark_used_and_lookup_hash(&self, filename: &str) -> Result<Option<String>, sqlx::Error> {
     let query = sqlx::query("INSERT INTO fs_hash_cache (fs_hash, in_use) VALUES(?, true) ON CONFLICT(fs_hash) do UPDATE set in_use = true RETURNING data_hash")
       .bind(filename);

@@ -31,13 +31,6 @@ impl Bucket {
         }
     }
 
-    pub async fn upload(&self, key: &str, source: File) -> Result<reqwest::Response, osauth::Error> {
-      let tokio_file = tokio::fs::File::from(source);
-      return self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
-        .body(tokio_file)
-        .send().await;
-    }
-
     pub async fn upload_with_progress(&self, key: &str, source: File, callback: impl Fn(usize) + Sync + Send + 'static) -> Result<reqwest::Response, osauth::Error> {
       let tokio_file = tokio::fs::File::from(source);
       let stream = tokio_util::io::ReaderStream::new(tokio_file).inspect_ok(move |bytes| {
