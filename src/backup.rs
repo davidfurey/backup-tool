@@ -75,6 +75,7 @@ pub fn generate_name() -> String{
   format!("backup-{}-{}", datetime, random_suffix)
 }
 
+#[derive(Default)]
 struct Stats {
   pub files: u64,
   pub unchanged_files: u64,
@@ -108,15 +109,6 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
   use futures::StreamExt;
   let directory_stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(&config.source));
 
-  let empty_stats = Stats {
-    files: 0,
-    directories: 0,
-    unchanged_files: 0,
-    links: 0,
-    uploaded: 0,
-    size: 0
-  };
-  
   let stats = directory_stream
     .enumerate()
     .map(|(index, dir_entry)| async move {
@@ -155,35 +147,26 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
       }
     };
     (result.1, result.2, result.3, uploaded)
-  }).buffered(64).fold(empty_stats, |cur, file_metadata| async { // does for_each here mean that the buffered(64) is moot?
+  }).buffered(64).fold(Stats::default(), |cur, file_metadata| async { // does for_each here mean that the buffered(64) is moot?
     match file_metadata {
       (Some(metadata), hash_cached, size, uploaded) => {
         metadata_writer.write(&metadata).await.unwrap();
         return match metadata.ttype {
-          filetype::FileType::FILE => { Stats {
+          filetype::FileType::FILE => Stats {
             files: cur.files + 1,
-            directories: cur.directories,
-            links: cur.links,
             unchanged_files: cur.unchanged_files + if hash_cached { 1 } else { 0 },
             uploaded: cur.uploaded + if uploaded { 1 } else { 0 },
             size: cur.size + size,
-          } },
-          filetype::FileType::SYMLINK => { Stats {
-            files: cur.files,
-            directories: cur.directories,
+            ..cur
+          },
+          filetype::FileType::SYMLINK => Stats {
             links: cur.links + 1,
-            unchanged_files: cur.unchanged_files,
-            uploaded: cur.uploaded,
-            size: cur.size
-          } },
-          filetype::FileType::DIRECTORY => { Stats {
-            files: cur.files,
+            ..cur
+          },
+          filetype::FileType::DIRECTORY => Stats {
             directories: cur.directories + 1,
-            links: cur.links,
-            unchanged_files: cur.unchanged_files,
-            uploaded: cur.uploaded,
-            size: cur.size
-          } }
+            ..cur
+          }
         }
       },
       _ => {
