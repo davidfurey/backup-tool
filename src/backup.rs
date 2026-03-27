@@ -122,7 +122,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
       Ok(entry) => {
-        hash_worker::hash_work(entry, index, &cache, &config.stores.to_vec(), &config.hmac_secret, &multi_progress, force_hash).await
+        hash_worker::hash_work(entry, index, &cache, &config.stores, &config.hmac_secret, &multi_progress, force_hash).await
       },
       Err(_) => { (None, None, false, 0) }
     };
@@ -130,7 +130,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
       Some(upload_request) => {
         let x = upload_request.filename.clone();
         let filename = x.to_string_lossy();
-        let requires_upload = cache.requires_upload(&upload_request.data_hash, &config.stores.to_vec()).await.unwrap();
+        let requires_upload = cache.requires_upload(&upload_request.data_hash, &config.stores).await.unwrap();
         if !requires_upload.is_empty() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
           // check here if it is encrypted on the filesystem?
           let key = Cert::from_file(&config.encrypting_key_file).unwrap();
