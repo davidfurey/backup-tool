@@ -41,8 +41,12 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
   bucket.download(key.as_str(), encrypted_file).await.unwrap();
   trace!("downloaded {:?}", destination_filename);
   let mut source = File::open(&destination_filename).unwrap();
-  let mut dest = File::create(&destination).unwrap();
-  decryption::decrypt_file(&mut source, &mut dest, cert, None).unwrap();
+  {
+    let mut dest = File::create(&destination).unwrap();
+    decryption::decrypt_file(&mut source, &mut dest, cert, None).unwrap();
+  }
+  drop(source);
+  std::fs::remove_file(&destination_filename).unwrap();
   if hash::data(&destination, hmac_secret) != data_hash { // todo: do not put file in correct location until this check is done
     std::fs::remove_file(&destination).unwrap();
     panic!("Data hash did not match for {:?}", destination);
