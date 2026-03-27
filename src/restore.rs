@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::os::unix::prelude::PermissionsExt;
 use std::path::{PathBuf, Path};
 
@@ -105,6 +106,86 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         1
       }
     }
+  }
+}
+
+pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>) {
+  let first_store = stores.first().expect("At least one store is required");
+
+  // Temp dir for the metadata file — cleaned up at the end.
+  let tmp_suffix: String = rand::thread_rng()
+    .sample_iter(&Alphanumeric)
+    .take(8)
+    .map(char::from)
+    .collect();
+  let tmp_dir = std::env::temp_dir().join(format!("backup-validate-{}", tmp_suffix));
+  create_dir_all(&tmp_dir).unwrap();
+
+  let key = Cert::from_file(key_file).unwrap();
+  let metadata_file = tmp_dir.join("metadata.sqlite");
+
+  {
+    let encrypted_path = tmp_dir.join("metadata.encrypted");
+    {
+      let encrypted_file = File::create(&encrypted_path).unwrap();
+      let metadata_bucket = first_store.metadata_bucket().await;
+      let prefix = &first_store.metadata_prefix;
+      metadata_bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+    }
+    {
+      let mut source = File::open(&encrypted_path).unwrap();
+      let mut dest = File::create(&metadata_file).unwrap();
+      let signing_key = signing_key_file.clone().map(|x| Cert::from_file(x).unwrap());
+      decryption::decrypt_file(&mut source, &mut dest, &key, signing_key).unwrap();
+    }
+    std::fs::remove_file(&encrypted_path).unwrap();
+  }
+
+  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+
+  // Initialise one data bucket per store up-front to avoid re-authenticating
+  // for every file. Wrapped in Arc so the shared reference can be moved into
+  // each per-file future without cloning the Buckets themselves.
+  let buckets: Arc<Vec<(i32, String, Bucket)>> = Arc::new(
+    futures::stream::iter(stores)
+      .then(|s| async move { (s.id, s.data_prefix.clone(), s.init().await) })
+      .collect()
+      .await
+  );
+
+  // Stream metadata entries directly; check each FILE's hash against every
+  // store concurrently. Folding into (total, missing) avoids collecting the
+  // full file list into memory.
+  let (total_files, missing): (u64, u64) = metadata_reader.read().await
+    .filter(|e| futures::future::ready(matches!(&e.ttype, FileType::FILE) && e.data_hash.is_some()))
+    .map(|e| {
+      let buckets = Arc::clone(&buckets);
+      async move {
+        let data_hash = e.data_hash.unwrap();
+        let mut file_missing: u64 = 0;
+        for (store_id, data_prefix, bucket) in buckets.iter() {
+          let key = format!("{}{}", data_prefix, data_hash);
+          if !bucket.exists(&key).await {
+            error!("MISSING  store={}  hash={}  file={}", store_id, &data_hash[..16], e.name);
+            file_missing += 1;
+          } else {
+            trace!("OK  store={}  hash={}", store_id, &data_hash[..16]);
+          }
+        }
+        (1u64, file_missing)
+      }
+    })
+    .buffer_unordered(16)
+    .fold((0u64, 0u64), |acc, (t, m)| futures::future::ready((acc.0 + t, acc.1 + m)))
+    .await;
+
+  remove_dir_all(&tmp_dir).unwrap();
+
+  if missing == 0 {
+    info!("Validation passed: {} files checked across {} store(s)", total_files, stores.len());
+  } else {
+    let total_checks = total_files * stores.len() as u64;
+    error!("Validation FAILED: {}/{} objects missing", missing, total_checks);
   }
 }
 

@@ -49,7 +49,9 @@ enum Commands {
         destination: String
     },
     List {},
-    Validate {},
+    Validate {
+        name: String
+    },
     RebuildCache {},
 }
 
@@ -101,11 +103,16 @@ async fn main() {
         Commands::List {} => {
             list::list_backups(config.stores.get(0).unwrap()).await
         }
-        Commands::Validate {} => { println!("Todo") }
+        Commands::Validate { name } => {
+            restore::validate_backup(
+                name,
+                &config.stores,
+                config.encrypting_key_file,
+                &config.signing_key_file,
+            ).await
+        }
         Commands::RebuildCache {} => {
             rebuild_cache::rebuild_cache(config).await
         }
     }
-// validate
-// rebuild-cache
 }

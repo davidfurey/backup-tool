@@ -41,6 +41,20 @@ impl Bucket {
         .send().await;
     }
 
+    /// Returns true if the object exists in this container, false if it is
+    /// missing or an error is encountered.
+    pub async fn exists(&self, key: &str) -> bool {
+        match self.session.head(OBJECT_STORAGE, &[self.container.as_ref(), key])
+            .send().await
+        {
+            Ok(response) => response.status().is_success(),
+            Err(e) => {
+                error!("Error checking existence of {}: {:?}", key, e);
+                false
+            }
+        }
+    }
+
     pub async fn download(&self, key: &str, dest: File) -> std::io::Result<u64> {
       let response = self.session.get(OBJECT_STORAGE, &[self.container.as_ref(), key]).send().await.unwrap();
       let stream = response

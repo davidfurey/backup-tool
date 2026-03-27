@@ -83,6 +83,7 @@ backup-tool [--config <path>] <command>
 | `backup` | Run an incremental backup |
 | `restore <name> <destination>` | Restore a named backup to a local directory |
 | `list` | List all available backups in the store |
+| `validate <name>` | Verify all data objects for a backup exist in every store |
 | `rebuild-cache` | Rebuild the local upload cache from Swift |
 
 ### `backup`
@@ -116,6 +117,35 @@ backup-tool list
 ```
 
 Prints the names of all backups found in the metadata container of the first configured store.
+
+### `validate`
+
+```bash
+backup-tool validate 2026-03-27T14-05-32
+```
+
+Checks that every file stored in the named backup is present in every configured store, without downloading or decrypting any data. The tool:
+
+1. Downloads and decrypts the backup's metadata file
+2. Authenticates to each store once up-front
+3. Issues a HEAD request per `(file, store)` pair, up to 16 concurrently
+4. Logs each missing object at `error` level with its store ID, truncated hash, and filename
+5. Prints a final pass/fail summary
+
+Exit output uses the standard `RUST_LOG` logging. A passing validation looks like:
+
+```
+INFO  Validation passed: 1234 files checked across 2 store(s)
+```
+
+A failing one:
+
+```
+ERROR MISSING  store=2  hash=a3f1b2c4d5e6f708  file=/home/user/documents/report.pdf
+ERROR Validation FAILED: 1/2468 objects missing
+```
+
+Directories and symlinks are not checked — they have no data object in Swift.
 
 ### `rebuild-cache`
 
