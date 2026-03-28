@@ -34,7 +34,7 @@ async fn generate_hash(dir_entry: &walkdir::DirEntry, cache: &AsyncCache, hmac_s
     res
 }
 
-pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress, force_hash: bool) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
+pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, source: &std::path::Path, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress, force_hash: bool) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
     let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
     let mut destination: Option<String> = None;
     let mut data_hash: Option<String> = None;
@@ -82,9 +82,13 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCac
     }
 
     let file_metadata = file_type.map(|ttype| {
+        let rel_name = dir_entry.path().strip_prefix(source)
+            .unwrap_or(dir_entry.path())
+            .to_string_lossy()
+            .to_string();
         metadata_file::FileMetadata {
             uid: id as i64,
-            name: dir_entry.path().to_string_lossy().to_string(),
+            name: rel_name,
             mtime: metadata.mtime(),
             mode: metadata.mode(),
             ttype: ttype,

@@ -114,7 +114,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
       Ok(entry) => {
-        hash_worker::hash_work(entry, index, &cache, &config.stores, &config.hmac_secret, &multi_progress, force_hash).await
+        hash_worker::hash_work(entry, index, &config.source, &cache, &config.stores, &config.hmac_secret, &multi_progress, force_hash).await
       },
       Err(_) => { (None, None, false, 0) }
     };

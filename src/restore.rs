@@ -73,9 +73,7 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
 }
 
 pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String, mp: &MultiProgress) -> i64 {
-  let canonical_name =  Path::new(entry.name.as_str());
-  let suffix = canonical_name.strip_prefix("/").unwrap();
-  let path = destination.join(suffix);
+  let path = destination.join(Path::new(entry.name.as_str()));
   if !path.starts_with(&destination) { //canonicalize() ???
     trace!("ignoring file that is attempting to breach restore path"); // this might require more thought since we allow symlinks
     //continue;
