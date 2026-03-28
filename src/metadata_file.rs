@@ -29,7 +29,7 @@ use std::path::PathBuf;
 impl MetadataReader {
   pub async fn new<'b>(filename: PathBuf) -> MetadataReader {
     let options = sqlx::sqlite::SqliteConnectOptions::new()
-      .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+      .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
       .read_only(true)
       .filename(filename);
     let reader = MetadataReader {
@@ -72,7 +72,7 @@ impl MetadataReader {
 impl MetadataWriter {
   pub async fn new<'b>(filename: PathBuf) -> MetadataWriter {
     let options = sqlx::sqlite::SqliteConnectOptions::new()
-      .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+      .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
       .create_if_missing(true)
       .filename(filename);
     let metadata_file = MetadataWriter {
