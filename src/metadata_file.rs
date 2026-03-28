@@ -51,7 +51,7 @@ impl MetadataReader {
     result.get(0)
   }
 
-  pub async fn read(&self) -> futures_core::stream::BoxStream<FileMetadata> {
+  pub async fn read(&self) -> futures_core::stream::BoxStream<'_, FileMetadata> {
     use futures::StreamExt;
     let query = sqlx::query("SELECT id, name, mtime, mode, ttype, destination, data_hash from files order by id asc;");
     Box::pin(self.pool.fetch(query).map(|z| {
