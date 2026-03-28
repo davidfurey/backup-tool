@@ -1,6 +1,7 @@
 use std::fs::File;
 use futures::TryStreamExt;
 use log::error;
+use reqwest::Method;
 use osauth::Session;
 use osauth::services::OBJECT_STORAGE;
 use futures::stream::StreamExt;
@@ -44,7 +45,7 @@ impl Bucket {
     /// Returns true if the object exists in this container, false if it is
     /// missing or an error is encountered.
     pub async fn exists(&self, key: &str) -> bool {
-        match self.session.head(OBJECT_STORAGE, &[self.container.as_ref(), key])
+        match self.session.request(OBJECT_STORAGE, Method::HEAD, &[self.container.as_ref(), key])
             .send().await
         {
             Ok(response) => response.status().is_success(),

@@ -147,11 +147,11 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
       }
     };
     (result.1, result.2, result.3, uploaded)
-  }).buffered(64).fold(Stats::default(), |cur, file_metadata| async { // does for_each here mean that the buffered(64) is moot?
+  }).buffered(64).fold((Stats::default(), metadata_writer), |(cur, metadata_writer), file_metadata| async move {
     match file_metadata {
       (Some(metadata), hash_cached, size, uploaded) => {
         metadata_writer.write(&metadata).await.unwrap();
-        return match metadata.ttype {
+        let new_stats = match metadata.ttype {
           filetype::FileType::FILE => Stats {
             files: cur.files + 1,
             unchanged_files: cur.unchanged_files + if hash_cached { 1 } else { 0 },
@@ -167,13 +167,15 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
             directories: cur.directories + 1,
             ..cur
           }
-        }
+        };
+        (new_stats, metadata_writer)
       },
       _ => {
-        return cur;
+        (cur, metadata_writer)
       }
     }
   }).await;
+  let (stats, metadata_writer) = stats;
 
   metadata_writer.write_metadata("size", stats.size.to_string().as_str()).await;
   metadata_writer.close().await;
