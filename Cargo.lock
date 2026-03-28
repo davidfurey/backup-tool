@@ -261,7 +261,6 @@ dependencies = [
  "clap 4.5.27",
  "console",
  "console-subscriber",
- "crossbeam-channel",
  "env_logger",
  "filetime",
  "fs2",
@@ -285,7 +284,6 @@ dependencies = [
  "sqlx",
  "strum",
  "tokio",
- "tokio-scoped",
  "tokio-stream",
  "tokio-util",
  "toml",
@@ -3440,16 +3438,6 @@ checksum = "5f6d0975eaace0cf0fcadee4e4aaa5da15b5c079146f2cffb67c113be122bf37"
 dependencies = [
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-scoped"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4beb8ba13bc53ac53ce1d52b42f02e5d8060f0f42138862869beb769722b256"
-dependencies = [
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
