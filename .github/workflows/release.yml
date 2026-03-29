@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create releases and upload assets
+
+jobs:
+  build-and-release:
+    name: Build Linux x86_64 binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm pkg-config nettle-dev
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+
+      - name: Strip binary
+        run: strip target/x86_64-unknown-linux-gnu/release/backup-tool
+
+      - name: Rename binary
+        run: |
+          cp target/x86_64-unknown-linux-gnu/release/backup-tool \
+             backup-tool-linux-x86_64
+
+      - name: Create GitHub Release and upload asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            backup-tool-linux-x86_64
