@@ -264,8 +264,10 @@ info "Verifying restored data..."
 
 # rsync dry-run covers content (checksum), mtimes, symlink targets,
 # missing files, and extra files in the restore directory in one pass.
+# The root directory entry (./) is excluded: the backup tool does not record
+# the source root as a metadata entry so its mtime is never restored.
 RSYNC_OUT=$(rsync -an --checksum --itemize-changes --delete \
-    "${SOURCE_DIR}/" "${RESTORE_DIR}/" 2>&1) || true
+    "${SOURCE_DIR}/" "${RESTORE_DIR}/" 2>&1 | grep -v ' \./\s*$') || true
 
 if [[ -z "${RSYNC_OUT}" ]]; then
     pass "All content, symlinks, and modification times match"
