@@ -118,11 +118,20 @@ pass "Test data generated ($(find "${SOURCE_DIR}" | wc -l | tr -d ' ') entries)"
 info "Generating PGP keypair..."
 ENCRYPT_KEY_FILE="${CONFIG_DIR}/key.asc"
 
+# sq flag names differ between Ubuntu 0.26.x and newer releases:
+#   --own-key / --without-password / --expiration  →  newer sq
+#   (no --own-key, no password flag, --expiry)     →  Ubuntu sq 0.26.x
+SQ_KEYGEN_EXTRA=()
+SQ_HELP=$(sq key generate --help 2>&1 || true)
+if echo "${SQ_HELP}" | grep -q -- '--own-key'; then
+    SQ_KEYGEN_EXTRA+=(--own-key --without-password --expiration never)
+else
+    SQ_KEYGEN_EXTRA+=(--expiry never)
+fi
+
 sq key generate \
-    --own-key \
+    "${SQ_KEYGEN_EXTRA[@]}" \
     --userid "Backup Integration Test <${KEY_EMAIL}>" \
-    --without-password \
-    --expiration never \
     --output "${ENCRYPT_KEY_FILE}" \
     --rev-cert "${WORK_DIR}/revocation.pgp"
 [[ -s "${ENCRYPT_KEY_FILE}" ]] || fail "Failed to generate PGP key"
