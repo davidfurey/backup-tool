@@ -18,7 +18,7 @@ use filetype::FileType;
 use crate::swift::Bucket;
 use crate::utils::humanise_bytes;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use filetime::{set_file_mtime, FileTime};
+use filetime::{set_file_mtime, set_symlink_file_times, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
 use fs2::free_space;
 
@@ -110,6 +110,8 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         symlink(entry.destination.clone().unwrap(), &path).unwrap();
         // Symlink permissions are not meaningful on Linux (always rwxrwxrwx)
         // and cannot be set via std::fs::set_permissions.
+        let mtime = FileTime::from_unix_time(entry.mtime, 0);
+        set_symlink_file_times(&path, mtime, mtime).unwrap();
         1
       }
       FileType::DIRECTORY => {
