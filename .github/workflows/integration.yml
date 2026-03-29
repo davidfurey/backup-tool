@@ -20,16 +20,13 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang llvm pkg-config nettle-dev rsync capnproto
+            clang llvm pkg-config nettle-dev rsync sq
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
-
-      - name: Install sq (Sequoia PGP CLI)
-        run: cargo install sequoia-sq --locked
 
       - name: Run integration test
         run: bash tests/integration.sh
