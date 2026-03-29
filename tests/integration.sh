@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Integration test for backup-tool
 #
-# Requires: docker, sq, cargo
+# Requires: docker, sq, cargo, rsync
 #
 # What it does:
 #   1. Builds the binary
@@ -80,7 +80,7 @@ trap cleanup EXIT
 ### Step 0: Prerequisites ####################################################
 
 info "Checking prerequisites..."
-for cmd in docker sq cargo; do
+for cmd in docker sq cargo rsync; do
     command -v "${cmd}" >/dev/null 2>&1 || fail "Required command not found: ${cmd}"
 done
 
@@ -261,54 +261,18 @@ pass "Restore completed"
 ### Step 12: Verify ##########################################################
 
 info "Verifying restored data..."
-ERRORS=0
 
-# File content
-while IFS= read -r -d '' src_file; do
-    rel="${src_file#${SOURCE_DIR}/}"
-    rst_file="${RESTORE_DIR}/${rel}"
-    if [[ ! -e "${rst_file}" ]]; then
-        echo "  MISSING: ${rel}"; (( ERRORS++ )) || true; continue
-    fi
-    if [[ -f "${src_file}" ]] && ! cmp --quiet "${src_file}" "${rst_file}"; then
-        echo "  CONTENT MISMATCH: ${rel}"; (( ERRORS++ )) || true
-    fi
-done < <(find "${SOURCE_DIR}" -mindepth 1 \( -type f -o -type l \) -print0)
+# rsync dry-run covers content (checksum), mtimes, symlink targets,
+# missing files, and extra files in the restore directory in one pass.
+RSYNC_OUT=$(rsync -an --checksum --itemize-changes --delete \
+    "${SOURCE_DIR}/" "${RESTORE_DIR}/" 2>&1) || true
 
-# Symlink targets
-while IFS= read -r -d '' src_link; do
-    rel="${src_link#${SOURCE_DIR}/}"
-    rst_link="${RESTORE_DIR}/${rel}"
-    if [[ ! -L "${rst_link}" ]]; then
-        echo "  NOT A SYMLINK: ${rel}"; (( ERRORS++ )) || true; continue
-    fi
-    src_target=$(readlink "${src_link}")
-    rst_target=$(readlink "${rst_link}")
-    if [[ "${src_target}" != "${rst_target}" ]]; then
-        echo "  SYMLINK MISMATCH: ${rel}: expected '${src_target}' got '${rst_target}'"
-        (( ERRORS++ )) || true
-    fi
-done < <(find "${SOURCE_DIR}" -mindepth 1 -type l -print0)
-
-# Modification times (1-second tolerance)
-while IFS= read -r -d '' src_file; do
-    rel="${src_file#${SOURCE_DIR}/}"
-    rst_file="${RESTORE_DIR}/${rel}"
-    [[ -f "${rst_file}" ]] || continue
-    src_mtime=$(mtime "${src_file}")
-    rst_mtime=$(mtime "${rst_file}")
-    diff=$(( src_mtime - rst_mtime ))
-    (( diff < 0 )) && diff=$(( -diff ))
-    if (( diff > 1 )); then
-        echo "  MTIME MISMATCH: ${rel}  src=${src_mtime} rst=${rst_mtime} diff=${diff}s"
-        (( ERRORS++ )) || true
-    fi
-done < <(find "${SOURCE_DIR}" -mindepth 1 -type f -print0)
-
-if [[ "${ERRORS}" -eq 0 ]]; then
+if [[ -z "${RSYNC_OUT}" ]]; then
     pass "All content, symlinks, and modification times match"
 else
-    fail "${ERRORS} verification error(s) found -- see above"
+    echo "${RSYNC_OUT}"
+    ERRORS=$(echo "${RSYNC_OUT}" | wc -l | tr -d ' ')
+    fail "${ERRORS} verification difference(s) found -- see above"
 fi
 
 echo ""
