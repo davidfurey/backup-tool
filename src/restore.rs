@@ -117,6 +117,9 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         create_dir_all(path.as_path()).unwrap();
         let permissions = PermissionsExt::from_mode(entry.mode);
         set_permissions(&path, permissions).unwrap();
+        // Note: mtime is intentionally NOT set here — it will be overwritten
+        // as files are written into the directory. A second pass in
+        // restore_backup applies directory mtimes after all content is written.
         1
       }
     }
@@ -256,7 +259,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     }
   }
 
-  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file.clone()).await;
 
   let size: u64 = metadata_reader.read_metadata("size").await.parse().unwrap();
   info!("Backup is {}", humanise_bytes(size));
@@ -290,5 +293,25 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     .await;
 
   counter_pb.finish_with_message("done");
+
+  // Second pass: apply directory mtimes.
+  // Directory mtimes are updated whenever files or subdirectories are created
+  // inside them, so they must be set after all content has been restored.
+  // Process deepest paths first (reverse lexicographic order) so that setting
+  // a child directory's mtime does not cause its parent to be re-stamped.
+  {
+    let dir_metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+    let mut dir_entries: Vec<FileMetadata> = dir_metadata_reader.read().await
+      .filter(|entry| futures::future::ready(matches!(entry.ttype, FileType::DIRECTORY)))
+      .collect()
+      .await;
+    dir_entries.sort_by(|a, b| b.name.cmp(&a.name));
+    for entry in dir_entries {
+      let path = destination.join(Path::new(entry.name.as_str()));
+      let mtime = FileTime::from_unix_time(entry.mtime, 0);
+      set_file_mtime(&path, mtime).unwrap();
+    }
+  }
+
   remove_dir_all(&temporary_data_dir).unwrap();
 }
