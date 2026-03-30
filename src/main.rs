@@ -43,6 +43,9 @@ enum Commands {
         force_hash: bool,
         #[arg(short, long, default_value_t = false)]
         dry_run: bool,
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
     },
     Restore {
         name: String,
@@ -50,9 +53,16 @@ enum Commands {
         #[arg(short, long)]
         store_id: i32,
     },
-    List {},
+    List {
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
+    },
     Validate {
-        name: String
+        name: String,
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
     },
     RebuildCache {},
 }
@@ -88,9 +98,19 @@ async fn main() {
         std::process::exit(1);
     }));
 
+    let filter_stores = |stores: Vec<crate::datastore::DataStore>, limit: &Vec<i32>| {
+        if limit.is_empty() {
+            stores
+        } else {
+            stores.into_iter().filter(|s| limit.contains(&s.id)).collect()
+        }
+    };
+
     match &cli.command {
-        Commands::Backup { force_hash, dry_run } => {
-            backup::run_backup(config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
+        Commands::Backup { force_hash, dry_run, limit } => {
+            let mut filtered_config = config;
+            filtered_config.stores = filter_stores(filtered_config.stores, limit);
+            backup::run_backup(filtered_config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
         }
         Commands::Restore { name, destination, store_id } => {
             let store = config.stores.iter().find(|s| s.id == *store_id)
@@ -105,13 +125,15 @@ async fn main() {
                 multi_progress,
             ).await
         }
-        Commands::List {} => {
-            list::list_backups(&config.stores).await
+        Commands::List { limit } => {
+            let stores = filter_stores(config.stores, limit);
+            list::list_backups(&stores).await
         }
-        Commands::Validate { name } => {
+        Commands::Validate { name, limit } => {
+            let stores = filter_stores(config.stores, limit);
             restore::validate_backup(
                 name,
-                &config.stores,
+                &stores,
                 config.encrypting_key_file,
                 &config.signing_key_file,
                 multi_progress,

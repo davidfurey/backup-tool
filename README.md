@@ -82,16 +82,17 @@ backup-tool [--config <path>] <command>
 |---|---|
 | `backup` | Run an incremental backup |
 | `restore <name> <destination>` | Restore a named backup to a local directory |
-| `list` | List all available backups in the store |
-| `validate <name>` | Verify all data objects for a backup exist in every store |
+| `list` | List available backups across all (or selected) stores |
+| `validate <name>` | Verify all data objects for a backup exist in every (or selected) store |
 | `rebuild-cache` | Rebuild the local upload cache from Swift |
 
 ### `backup`
 
 ```bash
 backup-tool backup
-backup-tool backup --force-hash   # re-hash every file, ignoring the local cache
-backup-tool backup --dry-run      # walk and hash files without uploading
+backup-tool backup --force-hash        # re-hash every file, ignoring the local cache
+backup-tool backup --dry-run           # walk and hash files without uploading
+backup-tool backup --limit 1,2        # upload only to stores with id 1 and 2
 ```
 
 Each backup is stored under a timestamped name (e.g. `2026-03-27T14-05-32`). The backup pipeline is:
@@ -106,25 +107,37 @@ Each backup is stored under a timestamped name (e.g. `2026-03-27T14-05-32`). The
 
 ```bash
 backup-tool restore 2026-03-27T14-05-32 /mnt/restore
+backup-tool restore 2026-03-27T14-05-32 /mnt/restore --store-id 2  # use store 2
 ```
+
+The `--store-id` flag selects which configured store to fetch data and metadata from (defaults to `1`).
 
 The destination directory must not already exist. The tool downloads and decrypts the metadata file, then streams file entries and restores each one. Content hashes are verified after decryption. Available disk space is checked before starting.
 
 ### `list`
 
 ```bash
-backup-tool list
+backup-tool list                  # all configured stores
+backup-tool list --limit 1,2     # only stores 1 and 2
 ```
 
-Prints the names of all backups found in the metadata container of the first configured store.
+Prints the names of all backups found across the queried stores. Backups present in every queried store are printed as-is; backups missing from one or more stores are annotated:
+
+```
+backup-2026-03-27T14-05-32-abc1
+backup-2026-03-25T09-00-00-xyz2 [missing from store(s): 2]
+```
+
+`--limit` accepts a comma-separated list (`--limit 1,2`) or repeated flags (`--limit 1 --limit 2`).
 
 ### `validate`
 
 ```bash
 backup-tool validate 2026-03-27T14-05-32
+backup-tool validate 2026-03-27T14-05-32 --limit 1,2  # check only stores 1 and 2
 ```
 
-Checks that every file stored in the named backup is present in every configured store, without downloading or decrypting any data. The tool:
+Checks that every file stored in the named backup is present in every queried store, without downloading or decrypting any data. Before checking file objects, the tool downloads and decrypts the metadata file from **all** queried stores and verifies the SHA-256 of the decrypted content is identical across them, aborting if they differ.
 
 1. Downloads and decrypts the backup's metadata file
 2. Authenticates to each store once up-front
