@@ -37,8 +37,24 @@ impl AsyncCache {
     }
   }
 
-  pub async fn clear_cold_storage_cache(&self) -> Result<SqliteQueryResult, sqlx::Error> {
-    self.pool.execute(sqlx::query("DELETE FROM uploaded_objects;")).await
+  /// Clear the cold storage cache. If `store_ids` is non-empty, only rows for
+  /// those stores are removed; otherwise all rows are deleted.
+  pub async fn clear_cold_storage_cache(&self, store_ids: &[i32]) -> Result<SqliteQueryResult, sqlx::Error> {
+    if store_ids.is_empty() {
+      self.pool.execute(sqlx::query("DELETE FROM uploaded_objects;")).await
+    } else {
+      // Build a parameterised query for the given ids.
+      let placeholders = store_ids.iter().enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+      let sql = format!("DELETE FROM uploaded_objects WHERE datastore_id IN ({});", placeholders);
+      let mut query = sqlx::query(&sql);
+      for id in store_ids {
+        query = query.bind(id);
+      }
+      self.pool.execute(query).await
+    }
   }
 
   pub async fn set_data_in_cold_storage(&self, hash: &str, md5_hash: &str, store_ids: &Vec<i32>) -> Result<usize, String> {

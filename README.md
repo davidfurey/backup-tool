@@ -84,7 +84,7 @@ backup-tool [--config <path>] <command>
 | `restore <name> <destination>` | Restore a named backup to a local directory |
 | `list` | List available backups across all (or selected) stores |
 | `validate <name>` | Verify all data objects for a backup exist in every (or selected) store |
-| `rebuild-cache` | Rebuild the local upload cache from Swift |
+| `rebuild-cache` | Rebuild the local upload cache from Swift (all or selected stores) |
 
 ### `backup`
 
@@ -163,10 +163,11 @@ Directories and symlinks are not checked — they have no data object in Swift.
 ### `rebuild-cache`
 
 ```bash
-backup-tool rebuild-cache
+backup-tool rebuild-cache                  # all configured stores
+backup-tool rebuild-cache --limit 1,2     # only stores 1 and 2
 ```
 
-Clears and repopulates the `uploaded_objects` table in the local cache by listing all objects in each store's data container. Useful after losing or moving `cache.db`.
+Clears and repopulates the `uploaded_objects` table in the local cache by listing all objects in each store's data container. When `--limit` is given, only the rows for the specified stores are cleared and then repopulated; rows for other stores are left untouched. Useful after losing or moving `cache.db`.
 
 ## Development
 

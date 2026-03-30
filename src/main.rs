@@ -64,7 +64,11 @@ enum Commands {
         #[arg(short, long, value_delimiter = ',', num_args = 0..)]
         limit: Vec<i32>,
     },
-    RebuildCache {},
+    RebuildCache {
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
+    },
 }
 
 #[tokio::main]
@@ -139,8 +143,8 @@ async fn main() {
                 multi_progress,
             ).await
         }
-        Commands::RebuildCache {} => {
-            rebuild_cache::rebuild_cache(config).await
+        Commands::RebuildCache { limit } => {
+            rebuild_cache::rebuild_cache(config, limit).await
         }
     }
 }
