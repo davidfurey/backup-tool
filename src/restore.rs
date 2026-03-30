@@ -16,7 +16,7 @@ use std::fs::{File, set_permissions, create_dir_all, remove_dir_all};
 use std::os::unix::fs::symlink;
 use crate::filetype;
 use filetype::FileType;
-use crate::swift::Bucket;
+use crate::bucket::Bucket;
 use crate::utils::humanise_bytes;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use filetime::{set_file_mtime, set_symlink_file_times, FileTime};

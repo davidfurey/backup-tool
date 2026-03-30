@@ -8,45 +8,37 @@ use futures::stream::StreamExt;
 use tokio_util::io::StreamReader;
 use crate::query;
 use query::Query;
+use crate::bucket::ObjectEntry;
 
-#[allow(dead_code)]
-#[derive(Deserialize, Debug)]
-pub struct ObjectEntry {
-  pub hash: String,
-  last_modified: String,
-  bytes: i128,
-  pub name: String,
-  content_type: String,
-}
-
-pub struct Bucket {
+/// The Swift-backed implementation.  Use [`Bucket`] in calling code.
+pub struct SwiftBucket {
   session: Session,
   container: String,
 }
 
-impl Bucket {
-    pub fn new(session: Session, container: &str) -> Bucket {
-        Bucket {
+impl SwiftBucket {
+    pub fn new(session: Session, container: &str) -> SwiftBucket {
+        SwiftBucket {
             session,
             container: container.to_string(),
         }
     }
 
-    pub async fn upload_with_progress(&self, key: &str, source: File, callback: impl Fn(usize) + Sync + Send + 'static) -> Result<reqwest::Response, osauth::Error> {
+    pub async fn upload_with_progress(&self, key: &str, source: File, callback: impl Fn(usize) + Sync + Send + 'static) -> Result<(), String> {
       let tokio_file = tokio::fs::File::from(source);
       let stream = tokio_util::io::ReaderStream::new(tokio_file).inspect_ok(move |bytes| {
         callback(bytes.len())
       });
-      return self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
+      self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
         .body(reqwest::Body::wrap_stream(stream))
-        .send().await;
+        .send().await
+        .map(|_| ())
+        .map_err(|e| format!("Swift upload error: {:?}", e))
     }
 
     /// Returns `Ok(true)` if the object exists (2xx), `Ok(false)` if it is
     /// definitively absent (HTTP 404), or `Err` for any other non-success
-    /// status or request-level failure. Non-404 errors are logged before
-    /// being returned so callers can distinguish a missing object from a
-    /// transient auth/network/Swift error.
+    /// status or request-level failure.
     pub async fn exists(&self, key: &str) -> Result<bool, String> {
         match self.session.request(OBJECT_STORAGE, Method::HEAD, &[self.container.as_ref(), key])
             .send().await

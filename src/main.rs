@@ -1,6 +1,8 @@
 pub mod encryption;
 pub mod decryption;
 pub mod swift;
+pub mod local_bucket;
+pub mod bucket;
 pub mod datastore;
 pub mod metadata_file;
 pub mod sqlite_cache;

@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 
 use crate::datastore::DataStore;
 use crate::sqlite_cache::AsyncCache;
-use crate::swift::Bucket;
+use crate::bucket::Bucket;
 use crate::{config, upload_worker, hash_worker, encryption};
 use config::BackupConfig;
 use chrono::prelude::{Utc, SecondsFormat};

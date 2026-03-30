@@ -6,9 +6,9 @@ use log::error;
 use log::trace;
 use sequoia_openpgp::Cert;
 
-use crate::{datastore, swift, encryption};
+use crate::{datastore, encryption};
 use datastore::DataStore;
-use swift::Bucket;
+use crate::bucket::Bucket;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 #[derive(Debug)]
