@@ -5,6 +5,7 @@ use std::path::{PathBuf, Path};
 
 use futures::{StreamExt, FutureExt};
 use log::{trace, error, info};
+use sha2::{Sha256, Digest};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use crate::{datastore, hash};
@@ -21,6 +22,14 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use filetime::{set_file_mtime, set_symlink_file_times, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
 use fs2::free_space;
+
+/// SHA-256 of the file at `path`, returned as a lowercase hex string.
+fn sha256_file(path: &PathBuf) -> String {
+  let mut file = File::open(path).unwrap();
+  let mut hasher = Sha256::new();
+  std::io::copy(&mut file, &mut hasher).unwrap();
+  format!("{:x}", hasher.finalize())
+}
 
 async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String, mp: &MultiProgress) {
   // todo: avoid repeating downloads
@@ -129,9 +138,9 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
 }
 
 pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
-  let first_store = stores.first().expect("At least one store is required");
+  assert!(!stores.is_empty(), "At least one store is required");
 
-  // Temp dir for the metadata file — cleaned up at the end.
+  // Temp dir for all metadata work — cleaned up at the end.
   let tmp_suffix: String = rand::thread_rng()
     .sample_iter(&Alphanumeric)
     .take(8)
@@ -141,24 +150,57 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   create_dir_all(&tmp_dir).unwrap();
 
   let key = Cert::from_file(key_file).unwrap();
-  let metadata_file = tmp_dir.join("metadata.sqlite");
 
-  {
-    let encrypted_path = tmp_dir.join("metadata.encrypted");
+  // Download and decrypt the metadata file from every store, then hash the
+  // decrypted content so the comparison isn't fooled by ciphertext nondeterminism.
+  info!("Downloading metadata from {} store(s)...", stores.len());
+  let mut store_meta: Vec<(i32, PathBuf, String)> = Vec::new(); // (store_id, decrypted_path, sha256)
+  for store in stores.iter() {
+    let encrypted_path = tmp_dir.join(format!("metadata-store-{}.encrypted", store.id));
+    let decrypted_path = tmp_dir.join(format!("metadata-store-{}.sqlite", store.id));
     {
       let encrypted_file = File::create(&encrypted_path).unwrap();
-      let metadata_bucket = first_store.metadata_bucket().await;
-      let prefix = &first_store.metadata_prefix;
+      let metadata_bucket = store.metadata_bucket().await;
+      let prefix = &store.metadata_prefix;
       metadata_bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
     }
     {
       let mut source = File::open(&encrypted_path).unwrap();
-      let mut dest = File::create(&metadata_file).unwrap();
+      let mut dest = File::create(&decrypted_path).unwrap();
       let signing_key = signing_key_file.clone().map(|x| Cert::from_file(x).unwrap());
       decryption::decrypt_file(&mut source, &mut dest, &key, signing_key).unwrap();
     }
     std::fs::remove_file(&encrypted_path).unwrap();
+    let hash = sha256_file(&decrypted_path);
+    info!("  store={}  metadata sha256={:.16}", store.id, &hash);
+    store_meta.push((store.id, decrypted_path, hash));
   }
+
+  // Verify all stores carry identical metadata.
+  let reference_hash = &store_meta[0].2;
+  let mut metadata_ok = true;
+  for (store_id, _, hash) in &store_meta {
+    if hash != reference_hash {
+      error!("METADATA MISMATCH  store={}  sha256={:.16}  (reference from store {} is {:.16})",
+             store_id, hash, stores[0].id, reference_hash);
+      metadata_ok = false;
+    }
+  }
+  if !metadata_ok {
+    error!("Metadata files differ across stores — aborting validation");
+    remove_dir_all(&tmp_dir).unwrap();
+    return;
+  }
+  if stores.len() > 1 {
+    info!("Metadata is identical across all {} stores", stores.len());
+  }
+
+  // Use the first store's decrypted copy for content validation; discard the rest.
+  let (_, first_decrypted, _) = store_meta.remove(0);
+  for (_, decrypted_path, _) in &store_meta {
+    std::fs::remove_file(decrypted_path).unwrap();
+  }
+  let metadata_file = first_decrypted;
 
   let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
 
