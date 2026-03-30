@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Integration test for backup-tool
 #
-# Requires: docker, sq, cargo, rsync
+# Requires: docker, sq, cargo, rsync, curl
 #
 # What it does:
 #   1. Builds the binary
@@ -80,7 +80,7 @@ trap cleanup EXIT
 ### Step 0: Prerequisites ####################################################
 
 info "Checking prerequisites..."
-for cmd in docker sq cargo rsync; do
+for cmd in docker sq cargo rsync curl; do
     command -v "${cmd}" >/dev/null 2>&1 || fail "Required command not found: ${cmd}"
 done
 
