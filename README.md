@@ -68,13 +68,23 @@ metadata_prefix    = "meta/"
 # auth_type = "v3applicationcredential"
 # auth_url  = "https://identity.example.com/v3"
 # ...
+
+# Alternatively, back a store with a local directory instead of Swift.
+# When local_path is set, container and cloud_config are ignored.
+# [[stores]]
+# id              = 2
+# local_path      = "/mnt/backup-mirror"
+# data_prefix     = "data/"
+# metadata_prefix = "meta/"
 ```
 
 Multiple `[[stores]]` sections are supported; backups are written to all of them in parallel. The `upload_data` and `upload_metadata` flags (both default `true`) let you create partial-mirror stores — for example a store that receives metadata only (useful for fast `list`/`validate` without storing data twice) or data only.
 
+Stores backed by a local directory use `local_path` instead of `container`. No OpenStack credentials are needed; objects are stored as plain files under the given directory using the same key structure (`<prefix><hash>` for data, `<prefix><name>.metadata` for metadata).
+
 ### OpenStack authentication
 
-Authentication is delegated to [osauth](https://github.com/dtantsur/rust-osauth). Each store can embed a `cloud_config` block, or rely on the standard OpenStack environment variables (`OS_AUTH_URL`, `OS_APPLICATION_CREDENTIAL_ID`, etc.) or a `clouds.yaml` file.
+Authentication is delegated to [osauth](https://github.com/dtantsur/rust-osauth). This only applies to Swift-backed stores (those without `local_path`). Each store can embed a `cloud_config` block, or rely on the standard OpenStack environment variables (`OS_AUTH_URL`, `OS_APPLICATION_CREDENTIAL_ID`, etc.) or a `clouds.yaml` file.
 
 ## Usage
 
