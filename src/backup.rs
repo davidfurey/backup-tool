@@ -18,14 +18,13 @@ use log::info;
 use crate::filetype;
 use crate::utils::humanise_bytes;
 
-async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, Bucket)> {
+async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket)> {
   use futures::StreamExt;
   let n = stores.len().max(1);
   futures::stream::iter(stores)
     .map(|store| async move {
       let bucket = store.init().await;
-      let metadata_bucket = store.metadata_bucket().await;
-      (store, bucket, metadata_bucket)
+      (store, bucket)
     })
     .buffer_unordered(n)
     .collect()
@@ -57,7 +56,7 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
     let combined_key = format!("{}{}", store.metadata_prefix, key);
 
     store
-      .metadata_bucket()
+      .init()
       .await
       .upload_with_progress(&combined_key, metadata_file, callback)
       .await
@@ -128,7 +127,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
           let key = Cert::from_file(&config.encrypting_key_file).unwrap();
           let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, multi_progress).await;
           if !dry_run {
-            let filtered_buckets: Vec<&(DataStore, Bucket, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
+            let filtered_buckets: Vec<&(DataStore, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
               buckets.iter().find(|bucket| bucket.0.id == *bucket_id)
             }).collect();
             let report = upload_worker::upload(upload_request2, &filtered_buckets, multi_progress).await;

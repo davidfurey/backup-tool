@@ -23,14 +23,14 @@ pub struct UploadReport {
     pub store_ids: Vec<i32>,
 }
 
-pub async fn upload(request: UploadRequest, buckets: &Vec<&(DataStore, Bucket, Bucket)>, mp: &MultiProgress) -> UploadReport {
+pub async fn upload(request: UploadRequest, buckets: &Vec<&(DataStore, Bucket)>, mp: &MultiProgress) -> UploadReport {
     trace!("{:?}\n", request.data_hash);
     let mut success_ids: Vec<i32> = Vec::new();
     let style =
         ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")
             .unwrap()
             .progress_chars("#>-");
-    for (store, bucket, _) in buckets.iter() {
+    for (store, bucket) in buckets.iter() {
         trace!("Uploading {} to store {}", request.data_hash, store.id);
         let encrypted_file = fs::File::open(&request.filename).unwrap();
         let key = format!("{}{}", store.data_prefix, request.data_hash);

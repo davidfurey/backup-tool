@@ -196,9 +196,9 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
     let decrypted_path = tmp_dir.join(format!("metadata-store-{}.sqlite", store.id));
     {
       let encrypted_file = File::create(&encrypted_path).unwrap();
-      let metadata_bucket = store.metadata_bucket().await;
+      let bucket = store.init().await;
       let prefix = &store.metadata_prefix;
-      metadata_bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+      bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
     }
     {
       let mut source = File::open(&encrypted_path).unwrap();
@@ -346,9 +346,9 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     
     {
       let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
-      let metadata_bucket = store.metadata_bucket().await;
+      let bucket = store.init().await;
       let prefix = &store.metadata_prefix;
-      metadata_bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+      bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
     }
     
     {

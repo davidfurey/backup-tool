@@ -36,7 +36,6 @@ OS_USER_DOMAIN_NAME="Default"
 OS_PROJECT_DOMAIN_NAME="Default"
 
 DATA_CONTAINER="backup-data"
-META_CONTAINER="backup-metadata"
 
 # Export so backup-tool's osauth::Session::from_env() picks them up
 export OS_AUTH_URL OS_USERNAME OS_PASSWORD OS_PROJECT_NAME \
@@ -209,7 +208,7 @@ fi
 [[ -n "${SWIFT_TOKEN}" ]]       || fail "Failed to obtain Keystone token"
 [[ -n "${SWIFT_ACCOUNT_URL}" ]] || fail "Failed to discover Swift account URL from catalog"
 
-for CONT in "${DATA_CONTAINER}" "${META_CONTAINER}"; do
+for CONT in "${DATA_CONTAINER}"; do
     HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
         -X PUT "${SWIFT_ACCOUNT_URL}/${CONT}" \
         -H "X-Auth-Token: ${SWIFT_TOKEN}") || true
@@ -232,8 +231,7 @@ encrypting_key_file = "${ENCRYPT_KEY_FILE}"
 
 [[stores]]
 id                 = 1
-data_container     = "${DATA_CONTAINER}"
-metadata_container = "${META_CONTAINER}"
+container          = "${DATA_CONTAINER}"
 data_prefix        = "data/"
 metadata_prefix    = "meta/"
 TOML

@@ -6,8 +6,8 @@ pub async fn list_backups(stores: &[DataStore]) {
   // Map each backup name to the set of store ids that hold it.
   let mut presence: BTreeMap<String, BTreeSet<i32>> = BTreeMap::new();
   for store in stores {
-    let metadata_bucket = store.metadata_bucket().await;
-    let objects = metadata_bucket.list(Some(store.metadata_prefix.as_str()), None).await;
+    let bucket = store.init().await;
+    let objects = bucket.list(Some(store.metadata_prefix.as_str()), None).await;
     objects.unwrap().iter().for_each(|obj| {
       if let Some(name) = obj.name
         .strip_prefix(store.metadata_prefix.as_str())

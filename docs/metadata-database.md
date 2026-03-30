@@ -167,7 +167,7 @@ There are no subdirectories or additional metadata stored alongside the object.
 ```
 1.  Authenticate to OpenStack Swift (OS_* environment variables or cloud config).
 
-2.  Download: {metadata_container}/{metadata_prefix}{backup_name}.metadata
+2.  Download: {container}/{metadata_prefix}{backup_name}.metadata
 
 3.  Decrypt the downloaded file with the recipient's OpenPGP private key.
     → result: metadata.sqlite (SQLite 3 database)
@@ -211,9 +211,9 @@ The fields relevant to understanding where objects are stored come from `backup.
 | `hmac_secret`          | Secret used in HMAC-SHA512 to compute `data_hash`. Required to verify restored file integrity. |
 | `encrypting_key_file`  | Path to the PGP public key used for encryption. The corresponding private key is needed for decryption/restore. |
 | `signing_key_file`     | *(Optional)* Path to a PGP key used to sign data at backup time. Pass the corresponding public key during decryption to verify signatures. |
-| `stores[].data_container`     | Swift container name for data objects. |
-| `stores[].metadata_container` | Swift container name for metadata objects. |
+| `stores[].container`          | Swift container name for both data and metadata objects. |
 | `stores[].data_prefix`        | String prepended to `data_hash` to form the Swift object key for data. |
 | `stores[].metadata_prefix`    | String prepended to `{backup_name}.metadata` to form the Swift object key for the metadata file. |
+| `stores[].cloud_config`       | *(Optional)* Embedded OpenStack cloud config for this store. If absent, `OS_*` environment variables are used. |
 
-OpenStack credentials are read from `OS_*` environment variables (standard OpenStack client variables: `OS_AUTH_URL`, `OS_USERNAME`, `OS_PASSWORD`, `OS_PROJECT_NAME`, `OS_USER_DOMAIN_NAME`, `OS_PROJECT_DOMAIN_NAME`, `OS_IDENTITY_API_VERSION`), or from a `data_cloud_config` / `metadata_cloud_config` block embedded in the store configuration.
+OpenStack credentials are read from `OS_*` environment variables (standard OpenStack client variables: `OS_AUTH_URL`, `OS_USERNAME`, `OS_PASSWORD`, `OS_PROJECT_NAME`, `OS_USER_DOMAIN_NAME`, `OS_PROJECT_DOMAIN_NAME`, `OS_IDENTITY_API_VERSION`), or from a `cloud_config` block embedded in the store configuration.

@@ -53,14 +53,13 @@ encrypting_key_file = "/etc/backup-tool/encrypt.pub.asc"
 
 [[stores]]
 id                 = 1
-data_container     = "my-backups-data"
-metadata_container = "my-backups-metadata"
+container          = "my-backups"
 data_prefix        = "data/"
 metadata_prefix    = "meta/"
 
 # OpenStack credentials for this store.
 # If omitted, osauth falls back to OS_* environment variables / clouds.yaml.
-# [stores.data_cloud_config]
+# [stores.cloud_config]
 # auth_type = "v3applicationcredential"
 # auth_url  = "https://identity.example.com/v3"
 # ...
@@ -70,7 +69,7 @@ Multiple `[[stores]]` sections are supported; backups are written to all of them
 
 ### OpenStack authentication
 
-Authentication is delegated to [osauth](https://github.com/dtantsur/rust-osauth). Each store can embed a `data_cloud_config` / `metadata_cloud_config` block, or rely on the standard OpenStack environment variables (`OS_AUTH_URL`, `OS_APPLICATION_CREDENTIAL_ID`, etc.) or a `clouds.yaml` file.
+Authentication is delegated to [osauth](https://github.com/dtantsur/rust-osauth). Each store can embed a `cloud_config` block, or rely on the standard OpenStack environment variables (`OS_AUTH_URL`, `OS_APPLICATION_CREDENTIAL_ID`, etc.) or a `clouds.yaml` file.
 
 ## Usage
 
