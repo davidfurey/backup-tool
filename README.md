@@ -95,7 +95,7 @@ backup-tool backup --dry-run           # walk and hash files without uploading
 backup-tool backup --limit 1,2        # upload only to stores with id 1 and 2
 ```
 
-Each backup is stored under a timestamped name (e.g. `2026-03-27T14-05-32`). The backup pipeline is:
+Each backup is stored under a timestamped name (e.g. `backup-2026-03-27T14:05:32Z-a1B2`). The backup pipeline is:
 
 1. Walk `source`, computing a filesystem-metadata hash (path + size + mtime) per file
 2. For cache misses, compute the HMAC-SHA-512 content hash (rayon thread pool)
@@ -106,8 +106,8 @@ Each backup is stored under a timestamped name (e.g. `2026-03-27T14-05-32`). The
 ### `restore`
 
 ```bash
-backup-tool restore 2026-03-27T14-05-32 /mnt/restore
-backup-tool restore 2026-03-27T14-05-32 /mnt/restore --store-id 2  # use store 2
+backup-tool restore backup-2026-03-27T14:05:32Z-a1B2 /mnt/restore
+backup-tool restore backup-2026-03-27T14:05:32Z-a1B2 /mnt/restore --store-id 2  # use store 2
 ```
 
 The `--store-id` flag selects which configured store to fetch data and metadata from (defaults to `1`).
@@ -124,8 +124,8 @@ backup-tool list --limit 1,2     # only stores 1 and 2
 Prints the names of all backups found across the queried stores. Backups present in every queried store are printed as-is; backups missing from one or more stores are annotated:
 
 ```
-backup-2026-03-27T14-05-32-abc1
-backup-2026-03-25T09-00-00-xyz2 [missing from store(s): 2]
+backup-2026-03-27T14:05:32Z-a1B2
+backup-2026-03-25T09:00:00Z-x9Y2 [missing from store(s): 2]
 ```
 
 `--limit` accepts a comma-separated list (`--limit 1,2`) or repeated flags (`--limit 1 --limit 2`).
@@ -133,8 +133,8 @@ backup-2026-03-25T09-00-00-xyz2 [missing from store(s): 2]
 ### `validate`
 
 ```bash
-backup-tool validate 2026-03-27T14-05-32
-backup-tool validate 2026-03-27T14-05-32 --limit 1,2  # check only stores 1 and 2
+backup-tool validate backup-2026-03-27T14:05:32Z-a1B2
+backup-tool validate backup-2026-03-27T14:05:32Z-a1B2 --limit 1,2  # check only stores 1 and 2
 ```
 
 Checks that every file stored in the named backup is present in every queried store, without downloading or decrypting any data. Before checking file objects, the tool downloads and decrypts the metadata file from **all** queried stores and verifies the SHA-256 of the decrypted content is identical across them, aborting if they differ.
@@ -143,19 +143,20 @@ Checks that every file stored in the named backup is present in every queried st
 2. Authenticates to each store once up-front
 3. Issues a HEAD request per `(file, store)` pair, up to 16 concurrently
 4. Logs each missing object at `error` level with its store ID, truncated hash, and filename
-5. Prints a final pass/fail summary
+5. Prints a final pass/fail summary via an indicatif progress bar
+6. Exits with status 1 if any objects are missing or checks fail (suitable for CI)
 
-Exit output uses the standard `RUST_LOG` logging. A passing validation looks like:
-
-```
-INFO  Validation passed: 1234 files checked across 2 store(s)
-```
-
-A failing one:
+A passing validation prints:
 
 ```
-ERROR MISSING  store=2  hash=a3f1b2c4d5e6f708  file=/home/user/documents/report.pdf
-ERROR Validation FAILED: 1/2468 objects missing
+[Validate]  ✓ [0:00:05] 42 files checked — passed (2 store(s))
+```
+
+A failing one — `MISSING` lines come from the error logger (controlled by `RUST_LOG`), followed by the final progress line:
+
+```
+ERROR MISSING  store=2  hash=a3f1b2c4d5e6f708  file=docs/reports/report.pdf
+[Validate]  ✓ [0:00:05] 84 files checked — FAILED: 1/84 missing
 ```
 
 Directories and symlinks are not checked — they have no data object in Swift.
