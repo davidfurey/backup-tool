@@ -224,41 +224,59 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   );
 
   // Stream metadata entries directly; check each FILE's hash against every
-  // store concurrently. Folding into (total, missing) avoids collecting the
-  // full file list into memory.
-  let (total_files, missing): (u64, u64) = metadata_reader.read().await
+  // store concurrently. Folding into (total, missing, errors) avoids
+  // collecting the full file list into memory. `missing` counts definitive
+  // 404 responses; `errors` counts unexpected statuses / request failures
+  // that may indicate auth or Swift outages rather than absent data.
+  let (total_files, missing, errors): (u64, u64, u64) = metadata_reader.read().await
     .filter(|e| futures::future::ready(matches!(&e.ttype, FileType::FILE) && e.data_hash.is_some()))
     .map(|e| {
       let buckets = Arc::clone(&buckets);
       async move {
         let data_hash = e.data_hash.unwrap();
         let mut file_missing: u64 = 0;
+        let mut file_errors: u64 = 0;
         for (store_id, data_prefix, bucket) in buckets.iter() {
           let key = format!("{}{}", data_prefix, data_hash);
-          if !bucket.exists(&key).await {
-            error!("MISSING  store={}  hash={}  file={}", store_id, &data_hash[..16], e.name);
-            file_missing += 1;
-          } else {
-            trace!("OK  store={}  hash={}", store_id, &data_hash[..16]);
+          match bucket.exists(&key).await {
+            Ok(true) => {
+              trace!("OK  store={}  hash={}", store_id, &data_hash[..16]);
+            }
+            Ok(false) => {
+              error!("MISSING  store={}  hash={}  file={}", store_id, &data_hash[..16], e.name);
+              file_missing += 1;
+            }
+            Err(_) => {
+              // exists() has already logged the status/error detail.
+              error!("ERROR  store={}  hash={}  file={} (could not verify — see above)", store_id, &data_hash[..16], e.name);
+              file_errors += 1;
+            }
           }
         }
-        (1u64, file_missing)
+        (1u64, file_missing, file_errors)
       }
     })
     .buffer_unordered(16)
-    .fold((0u64, 0u64), |acc, (t, m)| {
+    .fold((0u64, 0u64, 0u64), |acc, (t, m, e)| {
       checker_pb.inc(1);
-      futures::future::ready((acc.0 + t, acc.1 + m))
+      futures::future::ready((acc.0 + t, acc.1 + m, acc.2 + e))
     })
     .await;
 
   remove_dir_all(&tmp_dir).unwrap();
 
-  if missing == 0 {
+  if missing == 0 && errors == 0 {
     checker_pb.finish_with_message(format!(" — passed ({} store(s))", stores.len()));
   } else {
     let total_checks = total_files * stores.len() as u64;
-    checker_pb.finish_with_message(format!(" — FAILED: {}/{} missing", missing, total_checks));
+    let mut parts: Vec<String> = Vec::new();
+    if missing > 0 {
+      parts.push(format!("{}/{} missing", missing, total_checks));
+    }
+    if errors > 0 {
+      parts.push(format!("{} check error(s) (auth/network/Swift failure)", errors));
+    }
+    checker_pb.finish_with_message(format!(" — FAILED: {}", parts.join(", ")));
   }
 }
 

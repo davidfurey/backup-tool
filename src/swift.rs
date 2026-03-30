@@ -42,16 +42,34 @@ impl Bucket {
         .send().await;
     }
 
-    /// Returns true if the object exists in this container, false if it is
-    /// missing or an error is encountered.
-    pub async fn exists(&self, key: &str) -> bool {
+    /// Returns `Ok(true)` if the object exists (2xx), `Ok(false)` if it is
+    /// definitively absent (HTTP 404), or `Err` for any other non-success
+    /// status or request-level failure. Non-404 errors are logged before
+    /// being returned so callers can distinguish a missing object from a
+    /// transient auth/network/Swift error.
+    pub async fn exists(&self, key: &str) -> Result<bool, String> {
         match self.session.request(OBJECT_STORAGE, Method::HEAD, &[self.container.as_ref(), key])
             .send().await
         {
-            Ok(response) => response.status().is_success(),
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    Ok(true)
+                } else if status == reqwest::StatusCode::NOT_FOUND {
+                    Ok(false)
+                } else {
+                    let msg = format!(
+                        "Unexpected status {} checking existence of {}/{}",
+                        status, self.container, key
+                    );
+                    error!("{}", msg);
+                    Err(msg)
+                }
+            }
             Err(e) => {
-                error!("Error checking existence of {}: {:?}", key, e);
-                false
+                let msg = format!("Error checking existence of {}/{}: {:?}", self.container, key, e);
+                error!("{}", msg);
+                Err(msg)
             }
         }
     }
