@@ -263,7 +263,7 @@ pass "Validate completed"
 ### Step 11: Restore #########################################################
 
 info "Running restore into ${RESTORE_DIR}..."
-"${BINARY}" --config "${CONFIG_DIR}/backup.toml" restore "${BACKUP_NAME}" "${RESTORE_DIR}" \
+"${BINARY}" --config "${CONFIG_DIR}/backup.toml" restore "${BACKUP_NAME}" "${RESTORE_DIR}" --store-id 1 \
     2>&1 | grep -v "^$" | head -80 || true
 pass "Restore completed"
 
