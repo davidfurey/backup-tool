@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::os::unix::prelude::PermissionsExt;
 use std::time::Duration;
-use std::path::{PathBuf, Path};
+use std::path::{Component, PathBuf, Path};
 
 use futures::{StreamExt, FutureExt};
 use log::{trace, error, info};
@@ -22,6 +22,41 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use filetime::{set_file_mtime, set_symlink_file_times, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
 use fs2::free_space;
+
+/// Converts an entry name from the metadata database into a safe,
+/// normalised relative [`PathBuf`] that is guaranteed to contain no
+/// `..` components and no leading root separator.
+///
+/// Any `..` (ParentDir), absolute root, or prefix component causes the
+/// function to return `None`; the entry will be skipped.
+///
+/// Returns `None` if the resulting path is empty or otherwise unsafe.
+fn safe_relative_path(name: &str) -> Option<PathBuf> {
+    let mut result = PathBuf::new();
+
+    for component in Path::new(name).components() {
+        match component {
+            Component::Normal(c) => result.push(c),
+            Component::CurDir => {
+                // '.' is a no-op; skip it.
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                error!(
+                    "Rejecting entry {:?}: unsafe path component (must be a plain relative path)",
+                    name
+                );
+                return None;
+            }
+        }
+    }
+
+    if result.as_os_str().is_empty() {
+        error!("Rejecting entry {:?}: empty path after normalisation", name);
+        return None;
+    }
+
+    Some(result)
+}
 
 /// SHA-256 of the file at `path`, returned as a lowercase hex string.
 fn sha256_file(path: &PathBuf) -> String {
@@ -82,13 +117,15 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
 }
 
 pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String, mp: &MultiProgress) -> i64 {
-  let path = destination.join(Path::new(entry.name.as_str()));
-  if !path.starts_with(&destination) { //canonicalize() ???
-    trace!("ignoring file that is attempting to breach restore path"); // this might require more thought since we allow symlinks
-    //continue;
-    0
-  } else {
-    match entry.ttype {
+  // Normalise the stored name to a safe relative path before joining.
+  // safe_relative_path rejects any '..' component and strips a legacy
+  // leading '/' so that joining onto `destination` is always safe.
+  let rel = match safe_relative_path(entry.name.as_str()) {
+    Some(p) => p,
+    None => return 0,
+  };
+  let path = destination.join(&rel);
+  match entry.ttype {
       FileType::FILE => {
         trace!("Creating file {:?}", &path);
         let data_hash = match &entry.data_hash {
@@ -134,7 +171,6 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         1
       }
     }
-  }
 }
 
 pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
@@ -369,7 +405,11 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
       .await;
     dir_entries.sort_by(|a, b| b.name.cmp(&a.name));
     for entry in dir_entries {
-      let path = destination.join(Path::new(entry.name.as_str()));
+      let rel = match safe_relative_path(entry.name.as_str()) {
+        Some(p) => p,
+        None => continue,
+      };
+      let path = destination.join(&rel);
       let mtime = FileTime::from_unix_time(entry.mtime, 0);
       set_file_mtime(&path, mtime).unwrap();
     }
