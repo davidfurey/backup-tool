@@ -10,9 +10,20 @@ permissions:
   contents: write   # needed to create releases and upload assets
 
 jobs:
-  build-and-release:
-    name: Build Linux x86_64 binary
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            binary_suffix: linux-x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            binary_suffix: linux-arm64
 
     steps:
       - name: Checkout
@@ -22,32 +33,70 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang llvm pkg-config nettle-dev
+            clang llvm pkg-config \
+            libnettle-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            libbz2-dev
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+        run: cargo build --release --locked --target ${{ matrix.rust_target }}
 
-      - name: Strip binary
-        run: strip target/x86_64-unknown-linux-gnu/release/backup-tool
-
-      - name: Rename binary
+      - name: Strip and rename binary
         run: |
-          cp target/x86_64-unknown-linux-gnu/release/backup-tool \
-             backup-tool-linux-x86_64
+          strip target/${{ matrix.rust_target }}/release/backup-tool
+          cp target/${{ matrix.rust_target }}/release/backup-tool \
+             backup-tool-${{ matrix.binary_suffix }}
 
-      - name: Create GitHub Release and upload asset
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb package
+        run: cargo deb --no-build --target ${{ matrix.rust_target }}
+
+      - name: Locate .deb
+        id: deb
+        run: |
+          DEB=$(find target/${{ matrix.rust_target }}/debian -name '*.deb' | head -1)
+          echo "path=${DEB}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename ${DEB})" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.arch }}
+          path: |
+            backup-tool-${{ matrix.binary_suffix }}
+            ${{ steps.deb.outputs.path }}
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
         run: |
           gh release create "${{ github.ref_name }}" \
+            --repo "${GITHUB_REPO}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            backup-tool-linux-x86_64
+            artifacts/*
