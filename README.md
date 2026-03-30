@@ -57,6 +57,11 @@ container          = "my-backups"
 data_prefix        = "data/"
 metadata_prefix    = "meta/"
 
+# Whether to upload data/metadata objects to this store (both default to true).
+# Set to false to create a metadata-only or data-only mirror store.
+# upload_data     = true
+# upload_metadata = true
+
 # OpenStack credentials for this store.
 # If omitted, osauth falls back to OS_* environment variables / clouds.yaml.
 # [stores.cloud_config]
@@ -65,7 +70,7 @@ metadata_prefix    = "meta/"
 # ...
 ```
 
-Multiple `[[stores]]` sections are supported; backups are written to all of them in parallel.
+Multiple `[[stores]]` sections are supported; backups are written to all of them in parallel. The `upload_data` and `upload_metadata` flags (both default `true`) let you create partial-mirror stores — for example a store that receives metadata only (useful for fast `list`/`validate` without storing data twice) or data only.
 
 ### OpenStack authentication
 

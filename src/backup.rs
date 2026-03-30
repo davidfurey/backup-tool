@@ -38,6 +38,10 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
       .progress_chars("#>-");
 
   for store in stores.iter() {
+    if !store.upload_metadata {
+      info!("Skipping metadata upload to store {} (upload_metadata = false)", store.id);
+      continue;
+    }
     let metadata_file = std::fs::File::open(&filename).unwrap();
 
     let pb = multi_progress.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
@@ -128,7 +132,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
           let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, multi_progress).await;
           if !dry_run {
             let filtered_buckets: Vec<&(DataStore, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
-              buckets.iter().find(|bucket| bucket.0.id == *bucket_id)
+              buckets.iter().find(|b| b.0.id == *bucket_id && b.0.upload_data)
             }).collect();
             let report = upload_worker::upload(upload_request2, &filtered_buckets, multi_progress).await;
             cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
