@@ -106,7 +106,7 @@ async fn main() {
             ).await
         }
         Commands::List {} => {
-            list::list_backups(config.stores.get(0).unwrap()).await
+            list::list_backups(&config.stores).await
         }
         Commands::Validate { name } => {
             restore::validate_backup(
