@@ -173,7 +173,7 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
     }
 }
 
-pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
+pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) -> bool {
   assert!(!stores.is_empty(), "At least one store is required");
 
   // Temp dir for all metadata work — cleaned up at the end.
@@ -225,7 +225,7 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   if !metadata_ok {
     error!("Metadata files differ across stores — aborting validation");
     remove_dir_all(&tmp_dir).unwrap();
-    return;
+    return false;
   }
   if stores.len() > 1 {
     info!("Metadata is identical across all {} stores", stores.len());
@@ -303,6 +303,7 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
 
   if missing == 0 && errors == 0 {
     checker_pb.finish_with_message(format!(" — passed ({} store(s))", stores.len()));
+    true
   } else {
     let total_checks = total_files * stores.len() as u64;
     let mut parts: Vec<String> = Vec::new();
@@ -313,6 +314,7 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
       parts.push(format!("{} check error(s) (auth/network/Swift failure)", errors));
     }
     checker_pb.finish_with_message(format!(" — FAILED: {}", parts.join(", ")));
+    false
   }
 }
 

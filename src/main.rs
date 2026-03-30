@@ -135,13 +135,16 @@ async fn main() {
         }
         Commands::Validate { name, limit } => {
             let stores = filter_stores(config.stores, limit);
-            restore::validate_backup(
+            let passed = restore::validate_backup(
                 name,
                 &stores,
                 config.encrypting_key_file,
                 &config.signing_key_file,
                 multi_progress,
-            ).await
+            ).await;
+            if !passed {
+                std::process::exit(1);
+            }
         }
         Commands::RebuildCache { limit } => {
             rebuild_cache::rebuild_cache(config, limit).await
