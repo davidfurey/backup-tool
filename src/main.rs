@@ -46,7 +46,9 @@ enum Commands {
     },
     Restore {
         name: String,
-        destination: String
+        destination: String,
+        #[arg(short, long)]
+        store_id: i32,
     },
     List {},
     Validate {
@@ -90,11 +92,13 @@ async fn main() {
         Commands::Backup { force_hash, dry_run } => {
             backup::run_backup(config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
         }
-        Commands::Restore { name, destination } => {
+        Commands::Restore { name, destination, store_id } => {
+            let store = config.stores.iter().find(|s| s.id == *store_id)
+                .unwrap_or_else(|| panic!("No store with id {}", store_id));
             restore::restore_backup(
                 PathBuf::from(destination),
                 name, 
-                config.stores.get(0).unwrap(),
+                store,
                 config.encrypting_key_file,
                 &config.hmac_secret,
                 &config.signing_key_file,
