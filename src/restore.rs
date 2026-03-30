@@ -318,7 +318,7 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   }
 }
 
-pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
+pub async fn restore_backup(destination: PathBuf, backup: &String, metadata_store: &DataStore, data_store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
 
   if destination.exists() {
     error!("Bailing because destination already exists");
@@ -346,8 +346,8 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     
     {
       let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
-      let bucket = store.init().await;
-      let prefix = &store.metadata_prefix;
+      let bucket = metadata_store.init().await;
+      let prefix = &metadata_store.metadata_prefix;
       bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
     }
     
@@ -381,12 +381,12 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
   let data_cache = &temporary_data_dir;
   trace!("Destination: {:?}", destination.as_path());
   let destination = &destination;
-  let data_bucket = &store.init().await;
+  let data_bucket = &data_store.init().await;
   let mp_ref = &mp;
   let counter_inc = counter_pb.clone();
   metadata_reader.read().await
     .map(|entry| async move {
-      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key, hmac_secret, mp_ref).await
+      process_file(&entry, destination.clone(), &data_bucket, &data_store.data_prefix, &data_cache, &key, hmac_secret, mp_ref).await
     })
     .buffer_unordered(4)
     .for_each(|_| { counter_inc.inc(1); futures::future::ready(()) })

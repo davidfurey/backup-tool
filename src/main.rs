@@ -50,8 +50,12 @@ enum Commands {
     Restore {
         name: String,
         destination: String,
-        #[arg(short, long)]
+        /// Store to fetch data objects from.
+        #[arg(short, long, default_value_t = 1)]
         store_id: i32,
+        /// Store to fetch the metadata file from. Defaults to --store-id if not specified.
+        #[arg(long)]
+        metadata_store_id: Option<i32>,
     },
     List {
         /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
@@ -116,13 +120,17 @@ async fn main() {
             filtered_config.stores = filter_stores(filtered_config.stores, limit);
             backup::run_backup(filtered_config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
         }
-        Commands::Restore { name, destination, store_id } => {
-            let store = config.stores.iter().find(|s| s.id == *store_id)
+        Commands::Restore { name, destination, store_id, metadata_store_id } => {
+            let data_store = config.stores.iter().find(|s| s.id == *store_id)
                 .unwrap_or_else(|| panic!("No store with id {}", store_id));
+            let meta_id = metadata_store_id.unwrap_or(*store_id);
+            let metadata_store = config.stores.iter().find(|s| s.id == meta_id)
+                .unwrap_or_else(|| panic!("No store with id {}", meta_id));
             restore::restore_backup(
                 PathBuf::from(destination),
-                name, 
-                store,
+                name,
+                metadata_store,
+                data_store,
                 config.encrypting_key_file,
                 &config.hmac_secret,
                 &config.signing_key_file,

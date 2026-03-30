@@ -111,10 +111,11 @@ Each backup is stored under a timestamped name (e.g. `backup-2026-03-27T14:05:32
 
 ```bash
 backup-tool restore backup-2026-03-27T14:05:32Z-a1B2 /mnt/restore
-backup-tool restore backup-2026-03-27T14:05:32Z-a1B2 /mnt/restore --store-id 2  # use store 2
+backup-tool restore backup-2026-03-27T14:05:32Z-a1B2 /mnt/restore --store-id 2
+backup-tool restore backup-2026-03-27T14:05:32Z-a1B2 /mnt/restore --store-id 2 --metadata-store-id 3
 ```
 
-The `--store-id` flag selects which configured store to fetch data and metadata from (defaults to `1`).
+`--store-id` selects the store to fetch data objects from (defaults to `1`). `--metadata-store-id` selects the store to fetch the metadata file from; if omitted it defaults to `--store-id`. This lets you restore data objects from one store while reading the metadata file from another (e.g. a store that only holds metadata).
 
 The destination directory must not already exist. The tool downloads and decrypts the metadata file, then streams file entries and restores each one. Content hashes are verified after decryption. Available disk space is checked before starting.
 
