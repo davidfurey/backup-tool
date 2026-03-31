@@ -3,7 +3,7 @@ use std::os::unix::prelude::PermissionsExt;
 use std::time::Duration;
 use std::path::{Component, PathBuf, Path};
 
-use futures::{StreamExt, FutureExt};
+use futures::StreamExt;
 use log::{trace, error, info};
 use sha2::{Sha256, Digest};
 use sequoia_openpgp::Cert;
@@ -125,27 +125,33 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
   match entry.ttype {
       FileType::FILE => {
         trace!("Creating file {:?}", &path);
-        let data_hash = match &entry.data_hash {
-            Some(val) => val.as_str(), 
-            None => "",
-        };
-        let downloaded = download_file(
-          data_hash, 
-          path.clone(), 
-          &data_bucket, 
-          data_prefix, 
-          &key, 
-          &data_cache,
-          hmac_secret,
-          mp,
-        );
         let mtime = FileTime::from_unix_time(entry.mtime, 0);
-        downloaded.map(move |f| {
-          set_file_mtime(&path, mtime).unwrap();
-          let permissions = PermissionsExt::from_mode(entry.mode);
-          set_permissions(&path, permissions).unwrap();
-          f
-        }).await;
+        let permissions = PermissionsExt::from_mode(entry.mode);
+        match &entry.data_hash {
+          None => {
+            // Empty file: create it directly with no download.
+            if let Some(parent) = path.parent() {
+              create_dir_all(parent).unwrap();
+            }
+            File::create(&path).unwrap();
+            set_file_mtime(&path, mtime).unwrap();
+            set_permissions(&path, permissions).unwrap();
+          }
+          Some(data_hash) => {
+            download_file(
+              data_hash.as_str(),
+              path.clone(),
+              &data_bucket,
+              data_prefix,
+              &key,
+              &data_cache,
+              hmac_secret,
+              mp,
+            ).await;
+            set_file_mtime(&path, mtime).unwrap();
+            set_permissions(&path, permissions).unwrap();
+          }
+        }
         1
       }
       FileType::SYMLINK => {
