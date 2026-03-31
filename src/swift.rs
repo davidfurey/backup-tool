@@ -29,11 +29,17 @@ impl SwiftBucket {
       let stream = tokio_util::io::ReaderStream::new(tokio_file).inspect_ok(move |bytes| {
         callback(bytes.len())
       });
-      self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
+      let response = self.session.put(OBJECT_STORAGE, &[self.container.as_ref(), key])
         .body(reqwest::Body::wrap_stream(stream))
         .send().await
-        .map(|_| ())
-        .map_err(|e| format!("Swift upload error: {:?}", e))
+        .map_err(|e| format!("Swift upload error: {:?}", e))?;
+      let status = response.status();
+      if status.is_success() {
+        Ok(())
+      } else {
+        let body = response.text().await.unwrap_or_else(|_| "<unreadable body>".to_string());
+        Err(format!("Swift upload failed: HTTP {} for {}/{}: {}", status, self.container, key, body))
+      }
     }
 
     /// Returns `Ok(true)` if the object exists (2xx), `Ok(false)` if it is
