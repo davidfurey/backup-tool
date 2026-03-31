@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use log::error;
 use crate::datastore;
 use datastore::DataStore;
 
@@ -7,8 +8,14 @@ pub async fn list_backups(stores: &[DataStore]) {
   let mut presence: BTreeMap<String, BTreeSet<i32>> = BTreeMap::new();
   for store in stores {
     let bucket = store.init().await;
-    let objects = bucket.list(Some(store.metadata_prefix.as_str()), None).await;
-    objects.unwrap().iter().for_each(|obj| {
+    let objects = match bucket.list(Some(store.metadata_prefix.as_str()), None).await {
+      Ok(objs) => objs,
+      Err(e) => {
+        error!("Failed to list store {}: {}", store.id, e);
+        continue;
+      }
+    };
+    objects.iter().for_each(|obj| {
       if let Some(name) = obj.name
         .strip_prefix(store.metadata_prefix.as_str())
         .and_then(|n| n.strip_suffix(".metadata"))
