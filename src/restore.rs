@@ -117,9 +117,6 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
 }
 
 pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String, mp: &MultiProgress) -> i64 {
-  // Normalise the stored name to a safe relative path before joining.
-  // safe_relative_path rejects any '..' component and strips a legacy
-  // leading '/' so that joining onto `destination` is always safe.
   let rel = match safe_relative_path(entry.name.as_str()) {
     Some(p) => p,
     None => return 0,
