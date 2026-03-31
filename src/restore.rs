@@ -173,6 +173,18 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
 pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) -> bool {
   assert!(!stores.is_empty(), "At least one store is required");
 
+  // Partition the store list so that metadata-only mirrors are not checked
+  // for data objects, and data-only mirrors are not checked for the metadata
+  // file.  Both checks would fail by design for stores where the respective
+  // upload flag is false.
+  let meta_stores: Vec<&DataStore> = stores.iter().filter(|s| s.upload_metadata).collect();
+  let data_stores: Vec<&DataStore> = stores.iter().filter(|s| s.upload_data).collect();
+
+  if meta_stores.is_empty() {
+    info!("No stores with upload_metadata=true in the selected set — nothing to validate");
+    return true;
+  }
+
   // Temp dir for all metadata work — cleaned up at the end.
   let tmp_suffix: String = rand::thread_rng()
     .sample_iter(&Alphanumeric)
@@ -186,9 +198,9 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
 
   // Download and decrypt the metadata file from every store, then hash the
   // decrypted content so the comparison isn't fooled by ciphertext nondeterminism.
-  info!("Downloading metadata from {} store(s)...", stores.len());
+  info!("Downloading metadata from {} store(s)...", meta_stores.len());
   let mut store_meta: Vec<(i32, PathBuf, String)> = Vec::new(); // (store_id, decrypted_path, sha256)
-  for store in stores.iter() {
+  for store in meta_stores.iter() {
     let encrypted_path = tmp_dir.join(format!("metadata-store-{}.encrypted", store.id));
     let decrypted_path = tmp_dir.join(format!("metadata-store-{}.sqlite", store.id));
     {
@@ -215,7 +227,7 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   for (store_id, _, hash) in &store_meta {
     if hash != reference_hash {
       error!("METADATA MISMATCH  store={}  sha256={:.16}  (reference from store {} is {:.16})",
-             store_id, hash, stores[0].id, reference_hash);
+             store_id, hash, store_meta[0].0, reference_hash);
       metadata_ok = false;
     }
   }
@@ -224,8 +236,8 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
     remove_dir_all(&tmp_dir).unwrap();
     return false;
   }
-  if stores.len() > 1 {
-    info!("Metadata is identical across all {} stores", stores.len());
+  if meta_stores.len() > 1 {
+    info!("Metadata is identical across all {} stores", meta_stores.len());
   }
 
   // Use the first store's decrypted copy for content validation; discard the rest.
@@ -247,14 +259,19 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   checker_pb.enable_steady_tick(Duration::from_millis(80));
 
   // Initialise one data bucket per store up-front to avoid re-authenticating
-  // for every file. Wrapped in Arc so the shared reference can be moved into
+  // for every file. Only stores with upload_data=true are included.
+  // Wrapped in Arc so the shared reference can be moved into
   // each per-file future without cloning the Buckets themselves.
   let buckets: Arc<Vec<(i32, String, Bucket)>> = Arc::new(
-    futures::stream::iter(stores)
+    futures::stream::iter(data_stores.iter())
       .then(|s| async move { (s.id, s.data_prefix.clone(), s.init().await) })
       .collect()
       .await
   );
+
+  if buckets.is_empty() {
+    info!("No stores with upload_data=true in the selected set — skipping data object checks");
+  }
 
   // Stream metadata entries directly; check each FILE's hash against every
   // store concurrently. Folding into (total, missing, errors) avoids
@@ -299,10 +316,11 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   remove_dir_all(&tmp_dir).unwrap();
 
   if missing == 0 && errors == 0 {
-    checker_pb.finish_with_message(format!(" — passed ({} store(s))", stores.len()));
+    let data_store_count = data_stores.len();
+    checker_pb.finish_with_message(format!(" — passed ({} metadata store(s), {} data store(s))", meta_stores.len(), data_store_count));
     true
   } else {
-    let total_checks = total_files * stores.len() as u64;
+    let total_checks = total_files * data_stores.len() as u64;
     let mut parts: Vec<String> = Vec::new();
     if missing > 0 {
       parts.push(format!("{}/{} missing", missing, total_checks));
