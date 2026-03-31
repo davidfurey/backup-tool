@@ -9,12 +9,14 @@ fn default_true() -> bool { true }
 #[derive(Deserialize)]
 pub struct DataStore {
   pub id: i32,
-  pub container: String,
+  /// Swift container name. Required when `local_path` is not set.
+  pub container: Option<String>,
   pub data_prefix: String,
   pub metadata_prefix: String,
   pub cloud_config: Option<CloudConfig>,
   /// When set, this store reads and writes to a local directory instead of
   /// OpenStack Swift.  The path is used as the container root.
+  /// `container` and `cloud_config` are ignored when this is present.
   pub local_path: Option<String>,
   /// Whether data objects should be uploaded to this store (default: true).
   #[serde(default = "default_true")]
@@ -49,6 +51,8 @@ impl DataStore {
       Some(config) => config.create_session().await,
       None =>  osauth::Session::from_env().await
     }.expect("Failed to create an identity provider");
-    Bucket::Swift(swift::SwiftBucket::new(session, &self.container))
+    let container = self.container.as_deref()
+      .unwrap_or_else(|| panic!("Store {} has no container configured and no local_path set", self.id));
+    Bucket::Swift(swift::SwiftBucket::new(session, container))
   }
 }
