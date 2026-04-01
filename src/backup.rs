@@ -13,7 +13,7 @@ use crate::{config, upload_worker, hash_worker, encryption};
 use config::BackupConfig;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
-use log::info;
+use log::{info, error};
 
 use crate::filetype;
 use crate::utils::humanise_bytes;
@@ -90,6 +90,15 @@ struct Stats {
 
 pub async fn run_backup(config: BackupConfig, name: String, multi_progress: MultiProgress, force_hash: bool, dry_run: bool) {
 
+  // Only stores with upload_data=true participate in data object upload/deduplication checks.
+  // Fail fast on a real run if none exist — otherwise every file would be hashed and encrypted
+  // but no data objects would ever be uploaded, producing a corrupt backup.
+  let data_stores: Vec<DataStore> = config.stores.iter().filter(|s| s.upload_data).cloned().collect();
+  if !dry_run && data_stores.is_empty() {
+    error!("No stores with upload_data=true configured — data objects would never be uploaded. Aborting.");
+    return;
+  }
+
   let cache = AsyncCache::new().await;
   cache.init().await;
   let buckets = init_datastores(config.stores.to_vec()).await;
@@ -108,6 +117,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
   let cache = &cache;
   let multi_progress = &multi_progress;
   let buckets = &buckets;
+  let data_stores = &data_stores;
 
   use futures::StreamExt;
   let directory_stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(&config.source));
@@ -117,7 +127,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
       Ok(entry) => {
-        hash_worker::hash_work(entry, index, &config.source, &cache, &config.stores, &config.hmac_secret, &multi_progress, force_hash).await
+        hash_worker::hash_work(entry, index, &config.source, &cache, data_stores, &config.hmac_secret, &multi_progress, force_hash).await
       },
       Err(_) => { (None, None, false, 0) }
     };
@@ -125,7 +135,7 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
       Some(upload_request) => {
         let x = upload_request.filename.clone();
         let filename = x.to_string_lossy();
-        let requires_upload = cache.requires_upload(&upload_request.data_hash, &config.stores).await.unwrap();
+        let requires_upload = cache.requires_upload(&upload_request.data_hash, data_stores).await.unwrap();
         if !requires_upload.is_empty() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
           // check here if it is encrypted on the filesystem?
           let key = Cert::from_file(&config.encrypting_key_file).unwrap();
