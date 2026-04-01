@@ -64,7 +64,7 @@ Additional keys may be present in future schema versions.
 
 ### Table: `files`
 
-One row per filesystem entry recorded in the backup, in the order they were visited by a depth-first directory walk (i.e. `walkdir` default order, roughly lexicographic within each directory level).
+One row per filesystem entry recorded in the backup, in the order they were visited by a depth-first directory walk (i.e. `walkdir` default order, roughly lexicographic within each directory level). Directories are yielded **before** their contents, so a `DIRECTORY` row always appears before any entries nested inside it.
 
 ```sql
 CREATE TABLE files (
@@ -100,7 +100,7 @@ A regular file. To restore:
 1. Retrieve `data_hash` from the row.
 2. Download the object at `{data_prefix}{data_hash}` from the data Swift container.
 3. Decrypt the downloaded object (OpenPGP, same key as the metadata file).
-4. Verify the decrypted content by recomputing `HMAC-SHA512(content, hmac_secret)` and comparing (as case-insensitive hex) with `data_hash`. Abort if they do not match.
+4. Verify the decrypted content by recomputing `HMAC-SHA512(content, hmac_secret)` and comparing with `data_hash`. Abort if they do not match.
 5. Write the decrypted content to `{destination_root}/{name}`, creating parent directories as needed.
 6. Set the file's modification time to `mtime` (Unix seconds).
 7. Set the file's permissions to `mode`.
@@ -188,14 +188,14 @@ There are no subdirectories or additional metadata stored alongside the object.
 
 8.  First pass — create filesystem entries:
     For each row:
-      DIRECTORY → mkdir -p, chmod mode
-      SYMLINK   → symlink(destination, path), lutimes(path, mtime)
-      FILE      → download+decrypt data object, verify HMAC, write file,
+      DIRECTORY → do nothing
+      SYMLINK   → mkdir -p (parent), symlink(destination, path), lutimes(path, mtime)
+      FILE      → mkdir -p (parent), download+decrypt data object, verify HMAC, write file,
                   chmod mode, set mtime
 
-9.  Second pass — fix directory mtimes:
-    Collect all DIRECTORY rows, sort by name DESC (deepest first),
-    then set mtime on each directory path.
+9.  Second pass — create empty directories, set all directory mtimes and permissions:
+    Stream all entries in reverse insertion order and filter for DIRECTORY rows,
+    then create, set mtime and permissions on each directory path.
 
 10. Clean up temporary files.
 ```

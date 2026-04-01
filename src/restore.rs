@@ -125,20 +125,19 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
   match entry.ttype {
       FileType::FILE => {
         trace!("Creating file {:?}", &path);
+        // ensure parent directory exists
+        if let Some(parent) = path.parent() {
+          create_dir_all(parent).unwrap();
+        }
         let mtime = FileTime::from_unix_time(entry.mtime, 0);
         let permissions = PermissionsExt::from_mode(entry.mode);
         match &entry.data_hash {
           None => {
-            // Empty file: create it directly with no download.
-            if let Some(parent) = path.parent() {
-              create_dir_all(parent).unwrap();
-            }
             File::create(&path).unwrap();
             set_file_mtime(&path, mtime).unwrap();
             set_permissions(&path, permissions).unwrap();
           }
-          Some(data_hash) => {
-            download_file(
+          Some(data_hash) => {            download_file(
               data_hash.as_str(),
               path.clone(),
               &data_bucket,
@@ -156,6 +155,10 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
       }
       FileType::SYMLINK => {
         trace!("Creating symlink {:?} -> {:?}", &path, entry.destination);
+        // ensure parent directory exists
+        if let Some(parent) = path.parent() {
+          create_dir_all(parent).unwrap();
+        }
         symlink(entry.destination.clone().unwrap(), &path).unwrap();
         // Symlink permissions are not meaningful on Linux (always rwxrwxrwx)
         // and cannot be set via std::fs::set_permissions.
@@ -164,13 +167,10 @@ pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucke
         1
       }
       FileType::DIRECTORY => {
-        trace!("Creating dir {:?}", &path);
-        create_dir_all(path.as_path()).unwrap();
-        let permissions = PermissionsExt::from_mode(entry.mode);
-        set_permissions(&path, permissions).unwrap();
-        // Note: mtime is intentionally NOT set here — it will be overwritten
-        // as files are written into the directory. A second pass in
-        // restore_backup applies directory mtimes after all content is written.
+        // Directories that contain files or symlinks are created as needed with default mtime and permissions, 
+        // then updated in a second pass after all content is in place. This avoids issues with mtimes 
+        // being updated as files are written into the directory. Empty directories are created with 
+        // the correct mtime and permissions in the second pass.
         1
       }
     }
@@ -284,7 +284,7 @@ pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathB
   // collecting the full file list into memory. `missing` counts definitive
   // 404 responses; `errors` counts unexpected statuses / request failures
   // that may indicate auth or Swift outages rather than absent data.
-  let (total_files, missing, errors): (u64, u64, u64) = metadata_reader.read().await
+  let (total_files, missing, errors): (u64, u64, u64) = metadata_reader.read(false).await
     .filter(|e| futures::future::ready(matches!(&e.ttype, FileType::FILE) && e.data_hash.is_some()))
     .map(|e| {
       let buckets = Arc::clone(&buckets);
@@ -405,7 +405,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, metadata_stor
   let data_bucket = &data_store.init().await;
   let mp_ref = &mp;
   let counter_inc = counter_pb.clone();
-  metadata_reader.read().await
+  metadata_reader.read(false).await
     .map(|entry| async move {
       process_file(&entry, destination.clone(), &data_bucket, &data_store.data_prefix, &data_cache, &key, hmac_secret, mp_ref).await
     })
@@ -415,27 +415,32 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, metadata_stor
 
   counter_pb.finish_with_message("done");
 
-  // Second pass: apply directory mtimes.
+  // Second pass: create empty directories and apply mtimes + permissions to all directories.
   // Directory mtimes are updated whenever files or subdirectories are created
   // inside them, so they must be set after all content has been restored.
-  // Process deepest paths first (reverse lexicographic order) so that setting
-  // a child directory's mtime does not cause its parent to be re-stamped.
+  // Metadata reader normally returns entries in ascending order, so directories are processed before 
+  // their contents, but by passing reversed=true we can ensure directories are processed after their 
+  // contents, so that setting a child directory's mtime does not cause its parent to be re-stamped.
   {
     let dir_metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
-    let mut dir_entries: Vec<FileMetadata> = dir_metadata_reader.read().await
-      .filter(|entry| futures::future::ready(matches!(entry.ttype, FileType::DIRECTORY)))
-      .collect()
+    dir_metadata_reader.read(true).await
+      .for_each(|entry| async move {
+        if entry.ttype != FileType::DIRECTORY {
+          return;
+        }
+        let rel = match safe_relative_path(entry.name.as_str()) {
+          Some(p) => p,
+          None => return,
+        };
+        let path = destination.join(&rel);
+        trace!("Creating dir {:?}", &path);
+        create_dir_all(path.as_path()).unwrap();
+        let permissions = PermissionsExt::from_mode(entry.mode);
+        set_permissions(&path, permissions).unwrap();
+        let mtime = FileTime::from_unix_time(entry.mtime, 0);
+        set_file_mtime(&path, mtime).unwrap();
+      })
       .await;
-    dir_entries.sort_by(|a, b| b.name.cmp(&a.name));
-    for entry in dir_entries {
-      let rel = match safe_relative_path(entry.name.as_str()) {
-        Some(p) => p,
-        None => continue,
-      };
-      let path = destination.join(&rel);
-      let mtime = FileTime::from_unix_time(entry.mtime, 0);
-      set_file_mtime(&path, mtime).unwrap();
-    }
   }
 
   remove_dir_all(&temporary_data_dir).unwrap();
