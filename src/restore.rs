@@ -50,11 +50,6 @@ fn safe_relative_path(name: &str) -> Option<PathBuf> {
         }
     }
 
-    if result.as_os_str().is_empty() {
-        error!("Rejecting entry {:?}: empty path after normalisation", name);
-        return None;
-    }
-
     Some(result)
 }
 
@@ -421,27 +416,43 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, metadata_stor
   // Metadata reader normally returns entries in ascending order, so directories are processed before 
   // their contents, but by passing reversed=true we can ensure directories are processed after their 
   // contents, so that setting a child directory's mtime does not cause its parent to be re-stamped.
+
+  let mut root_dir: Option<FileMetadata> = None;
   {
     let dir_metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
-    dir_metadata_reader.read(true).await
-      .for_each(|entry| async move {
-        if entry.ttype != FileType::DIRECTORY {
-          return;
-        }
-        let rel = match safe_relative_path(entry.name.as_str()) {
-          Some(p) => p,
-          None => return,
-        };
-        let path = destination.join(&rel);
-        trace!("Creating dir {:?}", &path);
-        create_dir_all(path.as_path()).unwrap();
-        let permissions = PermissionsExt::from_mode(entry.mode);
-        set_permissions(&path, permissions).unwrap();
-        let mtime = FileTime::from_unix_time(entry.mtime, 0);
-        set_file_mtime(&path, mtime).unwrap();
-      })
-      .await;
+    let mut stream = dir_metadata_reader.read(true).await;
+    while let Some(entry) = stream.next().await {
+      if entry.ttype != FileType::DIRECTORY {
+        continue;
+      }
+      let rel = match safe_relative_path(entry.name.as_str()) {
+        Some(p) => p,
+        None => continue,
+      };
+      if rel.as_os_str().is_empty() {
+        // This is the root directory entry. Defer processing until the end, to avoid issues with
+        // the root's mtime being updated when the temporary directory is removed.
+        root_dir = Some(entry);
+        continue;
+      }
+      let path: PathBuf = destination.join(&rel);
+      trace!("Creating dir {:?}", &path);
+      create_dir_all(path.as_path()).unwrap();
+      let permissions = PermissionsExt::from_mode(entry.mode);
+      set_permissions(&path, permissions).unwrap();
+      let mtime = FileTime::from_unix_time(entry.mtime, 0);
+      set_file_mtime(&path, mtime).unwrap();
+    }
   }
 
   remove_dir_all(&temporary_data_dir).unwrap();
+
+  // Finally, set the root directory's mtime and permissions. This must be done after the temporary directory is removed, 
+  // to avoid the root's mtime being updated by file deletion inside it.
+  if let Some(root) = root_dir {
+    let permissions = PermissionsExt::from_mode(root.mode);
+    set_permissions(destination.as_path(), permissions).unwrap();
+    let mtime = FileTime::from_unix_time(root.mtime, 0);
+    set_file_mtime(destination.as_path(), mtime).unwrap();
+  }
 }
