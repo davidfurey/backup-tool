@@ -61,7 +61,9 @@ fi
 WORK_DIR="$(mktemp -d)"
 SOURCE_DIR="${WORK_DIR}/source"
 RESTORE_DIR="${WORK_DIR}/restore"
+RESTORE_LOCAL_DIR="${WORK_DIR}/restore_local"
 CONFIG_DIR="${WORK_DIR}/config"
+BACKUP_DESTINATION="${WORK_DIR}/backup"
 mkdir -p "${SOURCE_DIR}" "${CONFIG_DIR}"
 # RESTORE_DIR must NOT be pre-created — restore_backup requires a non-existent destination
 
@@ -234,6 +236,13 @@ id                 = 1
 container          = "${DATA_CONTAINER}"
 data_prefix        = "data/"
 metadata_prefix    = "meta/"
+
+[[stores]]
+id                 = 2
+local_path         = "${BACKUP_DESTINATION}"
+data_prefix        = "data/"
+metadata_prefix    = "meta/"
+
 TOML
 pass "backup.toml written"
 
@@ -260,14 +269,19 @@ pass "Validate completed"
 
 ### Step 11: Restore #########################################################
 
-info "Running restore into ${RESTORE_DIR}..."
+info "Running restore into ${RESTORE_DIR} from store 1..."
 "${BINARY}" --config "${CONFIG_DIR}/backup.toml" restore "${BACKUP_NAME}" "${RESTORE_DIR}" --store-id 1 \
+    2>&1 | grep -v "^$" | head -80 || true
+pass "Restore completed"
+
+info "Running restore into ${RESTORE_LOCAL_DIR} from store 2..."
+"${BINARY}" --config "${CONFIG_DIR}/backup.toml" restore "${BACKUP_NAME}" "${RESTORE_LOCAL_DIR}" --store-id 2 \
     2>&1 | grep -v "^$" | head -80 || true
 pass "Restore completed"
 
 ### Step 12: Verify ##########################################################
 
-info "Verifying restored data..."
+info "Verifying restored data for store 1..."
 
 # rsync dry-run covers content (checksum), mtimes, symlink targets,
 # missing files, and extra files in the restore directory in one pass.
@@ -275,11 +289,26 @@ RSYNC_OUT=$(rsync -an --checksum --itemize-changes --delete \
     "${SOURCE_DIR}/" "${RESTORE_DIR}/" 2>&1) || true
 
 if [[ -z "${RSYNC_OUT}" ]]; then
-    pass "All content, symlinks, and modification times match"
+    pass "All content, symlinks, and modification times match for store 1"
 else
     echo "${RSYNC_OUT}"
     ERRORS=$(echo "${RSYNC_OUT}" | wc -l | tr -d ' ')
-    fail "${ERRORS} verification difference(s) found -- see above"
+    fail "${ERRORS} verification difference(s) found for store 1 -- see above"
+fi
+
+info "Verifying restored data for store 2..."
+
+# rsync dry-run covers content (checksum), mtimes, symlink targets,
+# missing files, and extra files in the restore directory in one pass.
+RSYNC_OUT=$(rsync -an --checksum --itemize-changes --delete \
+    "${SOURCE_DIR}/" "${RESTORE_LOCAL_DIR}/" 2>&1) || true
+
+if [[ -z "${RSYNC_OUT}" ]]; then
+    pass "All content, symlinks, and modification times match for store 2"
+else
+    echo "${RSYNC_OUT}"
+    ERRORS=$(echo "${RSYNC_OUT}" | wc -l | tr -d ' ')
+    fail "${ERRORS} verification difference(s) found for store 2 -- see above"
 fi
 
 echo ""
