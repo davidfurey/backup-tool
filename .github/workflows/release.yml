@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang llvm pkg-config \
-            libnettle-dev \
+            nettle-dev \
             libsqlite3-dev \
             libssl-dev \
             libbz2-dev
@@ -66,7 +66,7 @@ jobs:
         id: deb
         run: |
           DEB=$(find target/${{ matrix.rust_target }}/debian -name '*.deb' | head -1)
-          echo "path=${DEB}" >> "$GITHUB_OUTPUT"
+          mv "$DEB" $(basename "$DEB")
           echo "name=$(basename ${DEB})" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
@@ -75,7 +75,7 @@ jobs:
           name: packages-${{ matrix.arch }}
           path: |
             backup-tool-${{ matrix.binary_suffix }}
-            ${{ steps.deb.outputs.path }}
+            ${{ steps.deb.outputs.name }}
 
   release:
     name: Create GitHub Release
