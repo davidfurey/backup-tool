@@ -8,21 +8,35 @@ pub async fn list_backups(stores: &[DataStore]) {
   let mut presence: BTreeMap<String, BTreeSet<i32>> = BTreeMap::new();
   for store in stores {
     let bucket = store.init().await;
-    let objects = match bucket.list(Some(store.metadata_prefix.as_str()), None).await {
-      Ok(objs) => objs,
-      Err(e) => {
-        error!("Failed to list store {}: {}", store.id, e);
-        continue;
-      }
-    };
-    objects.iter().for_each(|obj| {
-      if let Some(name) = obj.name
-        .strip_prefix(store.metadata_prefix.as_str())
-        .and_then(|n| n.strip_suffix(".metadata"))
+    let mut marker: Option<String> = None;
+
+    loop {
+      let objects = match bucket
+        .list(Some(store.metadata_prefix.as_str()), marker.as_deref())
+        .await
       {
-        presence.entry(name.to_string()).or_default().insert(store.id);
+        Ok(objs) => objs,
+        Err(e) => {
+          error!("Failed to list store {}: {}", store.id, e);
+          break;
+        }
+      };
+
+      if objects.is_empty() {
+        break;
       }
-    });
+
+      for obj in &objects {
+        if let Some(name) = obj.name
+          .strip_prefix(store.metadata_prefix.as_str())
+          .and_then(|n| n.strip_suffix(".metadata"))
+        {
+          presence.entry(name.to_string()).or_default().insert(store.id);
+        }
+      }
+
+      marker = objects.last().map(|obj| obj.name.clone());
+    }
   }
 
   let all_ids: BTreeSet<i32> = stores.iter().map(|s| s.id).collect();
