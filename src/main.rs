@@ -31,6 +31,7 @@ extern crate serde;
 extern crate serde_derive;
 
 #[derive(Parser)]
+#[command(version = env!("APP_VERSION"))]
 struct Cli {
     #[arg(short, long, default_value = "backup.toml")]
     config: PathBuf,

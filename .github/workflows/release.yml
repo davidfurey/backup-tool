@@ -60,7 +60,13 @@ jobs:
         run: cargo install cargo-deb --locked
 
       - name: Build .deb package
-        run: cargo deb --no-build --target ${{ matrix.rust_target }}
+        run: |
+          DEB_VERSION="${{ github.ref_name }}"
+          DEB_VERSION="${DEB_VERSION#v}"
+          if [ -z "$DEB_VERSION" ]; then
+            DEB_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          fi
+          cargo deb --no-build --target ${{ matrix.rust_target }} --deb-version "$DEB_VERSION"
 
       - name: Locate .deb
         id: deb
