@@ -1,6 +1,8 @@
 pub mod encryption;
 pub mod decryption;
 pub mod swift;
+pub mod local_bucket;
+pub mod bucket;
 pub mod datastore;
 pub mod metadata_file;
 pub mod sqlite_cache;
@@ -29,6 +31,7 @@ extern crate serde;
 extern crate serde_derive;
 
 #[derive(Parser)]
+#[command(version = env!("APP_VERSION"))]
 struct Cli {
     #[arg(short, long, default_value = "backup.toml")]
     config: PathBuf,
@@ -43,14 +46,36 @@ enum Commands {
         force_hash: bool,
         #[arg(short, long, default_value_t = false)]
         dry_run: bool,
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
     },
     Restore {
         name: String,
-        destination: String
+        destination: String,
+        /// Store to fetch data objects from.
+        #[arg(short, long, default_value_t = 1)]
+        store_id: i32,
+        /// Store to fetch the metadata file from. Defaults to --store-id if not specified.
+        #[arg(long)]
+        metadata_store_id: Option<i32>,
     },
-    List {},
-    Validate {},
-    RebuildCache {},
+    List {
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
+    },
+    Validate {
+        name: String,
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
+    },
+    RebuildCache {
+        /// Restrict to these store ids (comma-separated or repeated). Omit to use all stores.
+        #[arg(short, long, value_delimiter = ',', num_args = 0..)]
+        limit: Vec<i32>,
+    },
 }
 
 #[tokio::main]
@@ -84,28 +109,56 @@ async fn main() {
         std::process::exit(1);
     }));
 
-    match &cli.command {
-        Commands::Backup { force_hash, dry_run } => {
-            backup::run_backup(config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
+    let filter_stores = |stores: Vec<crate::datastore::DataStore>, limit: &Vec<i32>| {
+        if limit.is_empty() {
+            stores
+        } else {
+            stores.into_iter().filter(|s| limit.contains(&s.id)).collect()
         }
-        Commands::Restore { name, destination } => {
+    };
+
+    match &cli.command {
+        Commands::Backup { force_hash, dry_run, limit } => {
+            let mut filtered_config = config;
+            filtered_config.stores = filter_stores(filtered_config.stores, limit);
+            backup::run_backup(filtered_config, backup::generate_name(), multi_progress, !!force_hash, !!dry_run).await
+        }
+        Commands::Restore { name, destination, store_id, metadata_store_id } => {
+            let data_store = config.stores.iter().find(|s| s.id == *store_id)
+                .unwrap_or_else(|| panic!("No store with id {}", store_id));
+            let meta_id = metadata_store_id.unwrap_or(*store_id);
+            let metadata_store = config.stores.iter().find(|s| s.id == meta_id)
+                .unwrap_or_else(|| panic!("No store with id {}", meta_id));
             restore::restore_backup(
                 PathBuf::from(destination),
-                name, 
-                config.stores.get(0).unwrap(),
+                name,
+                metadata_store,
+                data_store,
                 config.encrypting_key_file,
                 &config.hmac_secret,
                 &config.signing_key_file,
+                multi_progress,
             ).await
         }
-        Commands::List {} => {
-            list::list_backups(config.stores.get(0).unwrap()).await
+        Commands::List { limit } => {
+            let stores = filter_stores(config.stores, limit);
+            list::list_backups(&stores).await
         }
-        Commands::Validate {} => { println!("Todo") }
-        Commands::RebuildCache {} => {
-            rebuild_cache::rebuild_cache(config).await
+        Commands::Validate { name, limit } => {
+            let stores = filter_stores(config.stores, limit);
+            let passed = restore::validate_backup(
+                name,
+                &stores,
+                config.encrypting_key_file,
+                &config.signing_key_file,
+                multi_progress,
+            ).await;
+            if !passed {
+                std::process::exit(1);
+            }
+        }
+        Commands::RebuildCache { limit } => {
+            rebuild_cache::rebuild_cache(config, limit).await
         }
     }
-// validate
-// rebuild-cache
 }

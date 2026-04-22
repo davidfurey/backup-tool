@@ -8,28 +8,27 @@ use walkdir::WalkDir;
 
 use crate::datastore::DataStore;
 use crate::sqlite_cache::AsyncCache;
-use crate::swift::Bucket;
+use crate::bucket::Bucket;
 use crate::{config, upload_worker, hash_worker, encryption};
 use config::BackupConfig;
 use chrono::prelude::{Utc, SecondsFormat};
 use rand::{distributions::Alphanumeric, Rng};
-use log::info;
+use log::{info, error};
 
 use crate::filetype;
 use crate::utils::humanise_bytes;
 
-async fn init_datastore(store: &DataStore) -> (DataStore, Bucket, Bucket) {
-  (store.clone(), store.init().await, store.metadata_bucket().await)
-}
-
-async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket, Bucket)> {
-  tokio::task::spawn(async move {
-    let mut buckets: Vec<(DataStore, Bucket, Bucket)> = Vec::new();
-    for bucket in stores.iter() {
-      buckets.push(init_datastore(bucket).await)
-    }
-    buckets
-  }).await.unwrap()
+async fn init_datastores(stores: Vec<DataStore>) -> Vec<(DataStore, Bucket)> {
+  use futures::StreamExt;
+  let n = stores.len().max(1);
+  futures::stream::iter(stores)
+    .map(|store| async move {
+      let bucket = store.init().await;
+      (store, bucket)
+    })
+    .buffer_unordered(n)
+    .collect()
+    .await
 }
 
 async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore>, multi_progress: &MultiProgress) {
@@ -39,6 +38,10 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
       .progress_chars("#>-");
 
   for store in stores.iter() {
+    if !store.upload_metadata {
+      info!("Skipping metadata upload to store {} (upload_metadata = false)", store.id);
+      continue;
+    }
     let metadata_file = std::fs::File::open(&filename).unwrap();
 
     let pb = multi_progress.add(ProgressBar::new(metadata_file.metadata().unwrap().len()))
@@ -57,7 +60,7 @@ async fn upload_metadata(key: String, filename: &PathBuf, stores: &Vec<DataStore
     let combined_key = format!("{}{}", store.metadata_prefix, key);
 
     store
-      .metadata_bucket()
+      .init()
       .await
       .upload_with_progress(&combined_key, metadata_file, callback)
       .await
@@ -75,6 +78,7 @@ pub fn generate_name() -> String{
   format!("backup-{}-{}", datetime, random_suffix)
 }
 
+#[derive(Default)]
 struct Stats {
   pub files: u64,
   pub unchanged_files: u64,
@@ -85,6 +89,15 @@ struct Stats {
 }
 
 pub async fn run_backup(config: BackupConfig, name: String, multi_progress: MultiProgress, force_hash: bool, dry_run: bool) {
+
+  // Only stores with upload_data=true participate in data object upload/deduplication checks.
+  // Fail fast on a real run if none exist — otherwise every file would be hashed and encrypted
+  // but no data objects would ever be uploaded, producing a corrupt backup.
+  let data_stores: Vec<DataStore> = config.stores.iter().filter(|s| s.upload_data).cloned().collect();
+  if !dry_run && data_stores.is_empty() {
+    error!("No stores with upload_data=true configured — data objects would never be uploaded. Aborting.");
+    return;
+  }
 
   let cache = AsyncCache::new().await;
   cache.init().await;
@@ -104,25 +117,17 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
   let cache = &cache;
   let multi_progress = &multi_progress;
   let buckets = &buckets;
+  let data_stores = &data_stores;
 
   use futures::StreamExt;
   let directory_stream: futures::stream::Iter<walkdir::IntoIter> = futures::stream::iter(WalkDir::new(&config.source));
 
-  let empty_stats = Stats {
-    files: 0,
-    directories: 0,
-    unchanged_files: 0,
-    links: 0,
-    uploaded: 0,
-    size: 0
-  };
-  
   let stats = directory_stream
     .enumerate()
     .map(|(index, dir_entry)| async move {
     let result = match dir_entry {
       Ok(entry) => {
-        hash_worker::hash_work(entry, index, &cache, &config.stores.to_vec(), &config.hmac_secret, &multi_progress, force_hash).await
+        hash_worker::hash_work(entry, index, &config.source, &cache, data_stores, &config.hmac_secret, &multi_progress, force_hash).await
       },
       Err(_) => { (None, None, false, 0) }
     };
@@ -130,14 +135,14 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
       Some(upload_request) => {
         let x = upload_request.filename.clone();
         let filename = x.to_string_lossy();
-        let requires_upload = cache.requires_upload(&upload_request.data_hash, &config.stores.to_vec()).await.unwrap();
+        let requires_upload = cache.requires_upload(&upload_request.data_hash, data_stores).await.unwrap();
         if !requires_upload.is_empty() && cache.lock_data(&upload_request.data_hash).await { // check here if it is in the database?
           // check here if it is encrypted on the filesystem?
           let key = Cert::from_file(&config.encrypting_key_file).unwrap();
           let upload_request2 = upload_worker::encryption_work(&config.data_cache, upload_request, &key, multi_progress).await;
           if !dry_run {
-            let filtered_buckets: Vec<&(DataStore, Bucket, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
-              buckets.iter().find(|bucket| bucket.0.id == *bucket_id)
+            let filtered_buckets: Vec<&(DataStore, Bucket)> = requires_upload.iter().flat_map(|bucket_id| {
+              buckets.iter().find(|b| b.0.id == *bucket_id && b.0.upload_data)
             }).collect();
             let report = upload_worker::upload(upload_request2, &filtered_buckets, multi_progress).await;
             cache.set_data_in_cold_storage(&report.data_hash.as_str(), "md5_hash", &report.store_ids).await.unwrap();
@@ -155,42 +160,35 @@ pub async fn run_backup(config: BackupConfig, name: String, multi_progress: Mult
       }
     };
     (result.1, result.2, result.3, uploaded)
-  }).buffered(64).fold(empty_stats, |cur, file_metadata| async { // does for_each here mean that the buffered(64) is moot?
+  }).buffered(64).fold((Stats::default(), metadata_writer), |(cur, metadata_writer), file_metadata| async move {
     match file_metadata {
       (Some(metadata), hash_cached, size, uploaded) => {
         metadata_writer.write(&metadata).await.unwrap();
-        return match metadata.ttype {
-          filetype::FileType::FILE => { Stats {
+        let new_stats = match metadata.ttype {
+          filetype::FileType::FILE => Stats {
             files: cur.files + 1,
-            directories: cur.directories,
-            links: cur.links,
             unchanged_files: cur.unchanged_files + if hash_cached { 1 } else { 0 },
             uploaded: cur.uploaded + if uploaded { 1 } else { 0 },
             size: cur.size + size,
-          } },
-          filetype::FileType::SYMLINK => { Stats {
-            files: cur.files,
-            directories: cur.directories,
+            ..cur
+          },
+          filetype::FileType::SYMLINK => Stats {
             links: cur.links + 1,
-            unchanged_files: cur.unchanged_files,
-            uploaded: cur.uploaded,
-            size: cur.size
-          } },
-          filetype::FileType::DIRECTORY => { Stats {
-            files: cur.files,
+            ..cur
+          },
+          filetype::FileType::DIRECTORY => Stats {
             directories: cur.directories + 1,
-            links: cur.links,
-            unchanged_files: cur.unchanged_files,
-            uploaded: cur.uploaded,
-            size: cur.size
-          } }
-        }
+            ..cur
+          }
+        };
+        (new_stats, metadata_writer)
       },
       _ => {
-        return cur;
+        (cur, metadata_writer)
       }
     }
   }).await;
+  let (stats, metadata_writer) = stats;
 
   metadata_writer.write_metadata("size", stats.size.to_string().as_str()).await;
   metadata_writer.close().await;

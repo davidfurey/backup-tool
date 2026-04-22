@@ -1,8 +1,11 @@
+use std::sync::Arc;
 use std::os::unix::prelude::PermissionsExt;
-use std::path::{PathBuf, Path};
+use std::time::Duration;
+use std::path::{Component, PathBuf, Path};
 
-use futures::{StreamExt, FutureExt};
+use futures::StreamExt;
 use log::{trace, error, info};
+use sha2::{Sha256, Digest};
 use sequoia_openpgp::Cert;
 use sequoia_openpgp::parse::Parse;
 use crate::{datastore, hash};
@@ -13,13 +16,52 @@ use std::fs::{File, set_permissions, create_dir_all, remove_dir_all};
 use std::os::unix::fs::symlink;
 use crate::filetype;
 use filetype::FileType;
-use crate::swift::Bucket;
+use crate::bucket::Bucket;
 use crate::utils::humanise_bytes;
-use filetime::{set_file_mtime, FileTime};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use filetime::{set_file_mtime, set_symlink_file_times, FileTime};
 use rand::{distributions::Alphanumeric, Rng};
 use fs2::free_space;
 
-async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String) {
+/// Converts an entry name from the metadata database into a safe,
+/// normalised relative [`PathBuf`] that is guaranteed to contain no
+/// `..` components and no leading root separator.
+///
+/// Any `..` (ParentDir), absolute root, or prefix component causes the
+/// function to return `None`; the entry will be skipped.
+///
+/// Returns `None` if the resulting path is empty or otherwise unsafe.
+fn safe_relative_path(name: &str) -> Option<PathBuf> {
+    let mut result = PathBuf::new();
+
+    for component in Path::new(name).components() {
+        match component {
+            Component::Normal(c) => result.push(c),
+            Component::CurDir => {
+                // '.' is a no-op; skip it.
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                error!(
+                    "Rejecting entry {:?}: unsafe path component (must be a plain relative path)",
+                    name
+                );
+                return None;
+            }
+        }
+    }
+
+    Some(result)
+}
+
+/// SHA-256 of the file at `path`, returned as a lowercase hex string.
+fn sha256_file(path: &PathBuf) -> String {
+  let mut file = File::open(path).unwrap();
+  let mut hasher = Sha256::new();
+  std::io::copy(&mut file, &mut hasher).unwrap();
+  format!("{:x}", hasher.finalize())
+}
+
+async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, data_prefix: &str, cert: &Cert, cache: &PathBuf, hmac_secret: &String, mp: &MultiProgress) {
   // todo: avoid repeating downloads
 
   // Use a short random suffix so that concurrent tasks downloading the same
@@ -32,10 +74,23 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
   let encrypted_temp = cache.join(format!("{}{}.gpg", data_hash, random_suffix));
   let decrypted_temp = cache.join(format!("{}{}.plain", data_hash, random_suffix));
 
-  trace!("downloading {:?}", encrypted_temp);
+  let pb = mp.add(ProgressBar::new_spinner());
+  pb.set_style(
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg} ({bytes} downloaded)")
+      .unwrap()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+  );
+  pb.set_prefix("[Download]");
+  pb.set_message(data_hash[..16].to_string());
+  pb.enable_steady_tick(Duration::from_millis(80));
+
   let encrypted_file = File::create(&encrypted_temp).unwrap();
   let key = format!("{}{}", data_prefix, data_hash);
-  bucket.download(key.as_str(), encrypted_file).await.unwrap();
+  let pb_cb = pb.clone();
+  bucket.download_with_progress(key.as_str(), encrypted_file, move |bytes| {
+    pb_cb.inc(bytes as u64);
+  }).await.unwrap();
+  pb.finish_and_clear();
   trace!("downloaded {:?}", encrypted_temp);
 
   // Decrypt into a temp file so the final path only appears once the hash
@@ -56,66 +111,235 @@ async fn download_file(data_hash: &str, destination: PathBuf, bucket: &Bucket, d
   trace!("restored {:?}", destination);
 }
 
-pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String) -> i64 {
-  let canonical_name =  Path::new(entry.name.as_str());
-  let suffix = canonical_name.strip_prefix("/").unwrap();
-  let path = destination.join(suffix);
-  if !path.starts_with(&destination) { //canonicalize() ???
-    trace!("ignoring file that is attempting to breach restore path"); // this might require more thought since we allow symlinks
-    //continue;
-    0
-  } else {
-    match entry.ttype {
+pub async fn process_file(entry: &FileMetadata, destination: PathBuf, data_bucket: &Bucket, data_prefix: &str, data_cache: &PathBuf, key: &Cert, hmac_secret: &String, mp: &MultiProgress) -> i64 {
+  let rel = match safe_relative_path(entry.name.as_str()) {
+    Some(p) => p,
+    None => return 0,
+  };
+  let path = destination.join(&rel);
+  match entry.ttype {
       FileType::FILE => {
         trace!("Creating file {:?}", &path);
-        let data_hash = match &entry.data_hash {
-            Some(val) => val.as_str(), 
-            None => "",
-        };
-        let downloaded = download_file(
-          data_hash, 
-          path.clone(), 
-          &data_bucket, 
-          data_prefix, 
-          &key, 
-          &data_cache,
-          hmac_secret
-        );
+        // ensure parent directory exists
+        if let Some(parent) = path.parent() {
+          create_dir_all(parent).unwrap();
+        }
         let mtime = FileTime::from_unix_time(entry.mtime, 0);
-        downloaded.map(move |f| {
-          set_file_mtime(&path, mtime).unwrap();
-          let permissions = PermissionsExt::from_mode(entry.mode);
-          set_permissions(&path, permissions).unwrap();
-          f
-        }).await;
+        let permissions = PermissionsExt::from_mode(entry.mode);
+        match &entry.data_hash {
+          None => {
+            File::create(&path).unwrap();
+            set_file_mtime(&path, mtime).unwrap();
+            set_permissions(&path, permissions).unwrap();
+          }
+          Some(data_hash) => {            download_file(
+              data_hash.as_str(),
+              path.clone(),
+              &data_bucket,
+              data_prefix,
+              &key,
+              &data_cache,
+              hmac_secret,
+              mp,
+            ).await;
+            set_file_mtime(&path, mtime).unwrap();
+            set_permissions(&path, permissions).unwrap();
+          }
+        }
         1
       }
       FileType::SYMLINK => {
         trace!("Creating symlink {:?} -> {:?}", &path, entry.destination);
+        // ensure parent directory exists
+        if let Some(parent) = path.parent() {
+          create_dir_all(parent).unwrap();
+        }
         symlink(entry.destination.clone().unwrap(), &path).unwrap();
         // Symlink permissions are not meaningful on Linux (always rwxrwxrwx)
         // and cannot be set via std::fs::set_permissions.
+        let mtime = FileTime::from_unix_time(entry.mtime, 0);
+        set_symlink_file_times(&path, mtime, mtime).unwrap();
         1
       }
       FileType::DIRECTORY => {
-        trace!("Creating dir {:?}", &path);
-        create_dir_all(path.as_path()).unwrap();
-        let permissions = PermissionsExt::from_mode(entry.mode);
-        set_permissions(&path, permissions).unwrap();
+        // Directories that contain files or symlinks are created as needed with default mtime and permissions, 
+        // then updated in a second pass after all content is in place. This avoids issues with mtimes 
+        // being updated as files are written into the directory. Empty directories are created with 
+        // the correct mtime and permissions in the second pass.
         1
       }
     }
+}
+
+pub async fn validate_backup(backup: &str, stores: &[DataStore], key_file: PathBuf, signing_key_file: &Option<PathBuf>, mp: MultiProgress) -> bool {
+  assert!(!stores.is_empty(), "At least one store is required");
+
+  // Partition the store list so that metadata-only mirrors are not checked
+  // for data objects, and data-only mirrors are not checked for the metadata
+  // file.  Both checks would fail by design for stores where the respective
+  // upload flag is false.
+  let meta_stores: Vec<&DataStore> = stores.iter().filter(|s| s.upload_metadata).collect();
+  let data_stores: Vec<&DataStore> = stores.iter().filter(|s| s.upload_data).collect();
+
+  if meta_stores.is_empty() {
+    info!("No stores with upload_metadata=true in the selected set — nothing to validate");
+    return true;
+  }
+
+  // Temp dir for all metadata work — cleaned up at the end.
+  let tmp_suffix: String = rand::thread_rng()
+    .sample_iter(&Alphanumeric)
+    .take(8)
+    .map(char::from)
+    .collect();
+  let tmp_dir = std::env::temp_dir().join(format!("backup-validate-{}", tmp_suffix));
+  create_dir_all(&tmp_dir).unwrap();
+
+  let key = Cert::from_file(key_file).unwrap();
+
+  // Download and decrypt the metadata file from every store, then hash the
+  // decrypted content so the comparison isn't fooled by ciphertext nondeterminism.
+  info!("Downloading metadata from {} store(s)...", meta_stores.len());
+  let mut store_meta: Vec<(i32, PathBuf, String)> = Vec::new(); // (store_id, decrypted_path, sha256)
+  for store in meta_stores.iter() {
+    let encrypted_path = tmp_dir.join(format!("metadata-store-{}.encrypted", store.id));
+    let decrypted_path = tmp_dir.join(format!("metadata-store-{}.sqlite", store.id));
+    {
+      let encrypted_file = File::create(&encrypted_path).unwrap();
+      let bucket = store.init().await;
+      let prefix = &store.metadata_prefix;
+      bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+    }
+    {
+      let mut source = File::open(&encrypted_path).unwrap();
+      let mut dest = File::create(&decrypted_path).unwrap();
+      let signing_key = signing_key_file.clone().map(|x| Cert::from_file(x).unwrap());
+      decryption::decrypt_file(&mut source, &mut dest, &key, signing_key).unwrap();
+    }
+    std::fs::remove_file(&encrypted_path).unwrap();
+    let hash = sha256_file(&decrypted_path);
+    info!("  store={}  metadata sha256={:.16}", store.id, &hash);
+    store_meta.push((store.id, decrypted_path, hash));
+  }
+
+  // Verify all stores carry identical metadata.
+  let reference_hash = &store_meta[0].2;
+  let mut metadata_ok = true;
+  for (store_id, _, hash) in &store_meta {
+    if hash != reference_hash {
+      error!("METADATA MISMATCH  store={}  sha256={:.16}  (reference from store {} is {:.16})",
+             store_id, hash, store_meta[0].0, reference_hash);
+      metadata_ok = false;
+    }
+  }
+  if !metadata_ok {
+    error!("Metadata files differ across stores — aborting validation");
+    remove_dir_all(&tmp_dir).unwrap();
+    return false;
+  }
+  if meta_stores.len() > 1 {
+    info!("Metadata is identical across all {} stores", meta_stores.len());
+  }
+
+  // Use the first store's decrypted copy for content validation; discard the rest.
+  let (_, first_decrypted, _) = store_meta.remove(0);
+  for (_, decrypted_path, _) in &store_meta {
+    std::fs::remove_file(decrypted_path).unwrap();
+  }
+  let metadata_file = first_decrypted;
+
+  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+
+  let checker_pb = mp.add(ProgressBar::new_spinner());
+  checker_pb.set_style(
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {pos} files checked{msg}")
+      .unwrap()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+  );
+  checker_pb.set_prefix("[Validate]");
+  checker_pb.enable_steady_tick(Duration::from_millis(80));
+
+  // Initialise one data bucket per store up-front to avoid re-authenticating
+  // for every file. Only stores with upload_data=true are included.
+  // Wrapped in Arc so the shared reference can be moved into
+  // each per-file future without cloning the Buckets themselves.
+  let buckets: Arc<Vec<(i32, String, Bucket)>> = Arc::new(
+    futures::stream::iter(data_stores.iter())
+      .then(|s| async move { (s.id, s.data_prefix.clone(), s.init().await) })
+      .collect()
+      .await
+  );
+
+  if buckets.is_empty() {
+    info!("No stores with upload_data=true in the selected set — skipping data object checks");
+  }
+
+  // Stream metadata entries directly; check each FILE's hash against every
+  // store concurrently. Folding into (total, missing, errors) avoids
+  // collecting the full file list into memory. `missing` counts definitive
+  // 404 responses; `errors` counts unexpected statuses / request failures
+  // that may indicate auth or Swift outages rather than absent data.
+  let (total_files, missing, errors): (u64, u64, u64) = metadata_reader.read(false).await
+    .filter(|e| futures::future::ready(matches!(&e.ttype, FileType::FILE) && e.data_hash.is_some()))
+    .map(|e| {
+      let buckets = Arc::clone(&buckets);
+      async move {
+        let data_hash = e.data_hash.unwrap();
+        let mut file_missing: u64 = 0;
+        let mut file_errors: u64 = 0;
+        for (store_id, data_prefix, bucket) in buckets.iter() {
+          let key = format!("{}{}", data_prefix, data_hash);
+          match bucket.exists(&key).await {
+            Ok(true) => {
+              trace!("OK  store={}  hash={}", store_id, &data_hash[..16]);
+            }
+            Ok(false) => {
+              error!("MISSING  store={}  hash={}  file={}", store_id, &data_hash[..16], e.name);
+              file_missing += 1;
+            }
+            Err(_) => {
+              // exists() has already logged the status/error detail.
+              error!("ERROR  store={}  hash={}  file={} (could not verify — see above)", store_id, &data_hash[..16], e.name);
+              file_errors += 1;
+            }
+          }
+        }
+        (1u64, file_missing, file_errors)
+      }
+    })
+    .buffer_unordered(16)
+    .fold((0u64, 0u64, 0u64), |acc, (t, m, e)| {
+      checker_pb.inc(1);
+      futures::future::ready((acc.0 + t, acc.1 + m, acc.2 + e))
+    })
+    .await;
+
+  remove_dir_all(&tmp_dir).unwrap();
+
+  if missing == 0 && errors == 0 {
+    let data_store_count = data_stores.len();
+    checker_pb.finish_with_message(format!(" — passed ({} metadata store(s), {} data store(s))", meta_stores.len(), data_store_count));
+    true
+  } else {
+    let total_checks = total_files * data_stores.len() as u64;
+    let mut parts: Vec<String> = Vec::new();
+    if missing > 0 {
+      parts.push(format!("{}/{} missing", missing, total_checks));
+    }
+    if errors > 0 {
+      parts.push(format!("{} check error(s) (auth/network/Swift failure)", errors));
+    }
+    checker_pb.finish_with_message(format!(" — FAILED: {}", parts.join(", ")));
+    false
   }
 }
 
-pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>) {
+pub async fn restore_backup(destination: PathBuf, backup: &String, metadata_store: &DataStore, data_store: &DataStore, key_file: PathBuf, hmac_secret: &String, signing_key_file: &Option<PathBuf>, mp: MultiProgress) {
 
   if destination.exists() {
     error!("Bailing because destination already exists");
     return;
   }
-
-  // todo: same progress meters as backup
 
   // Use a random suffix for the temp dir so it cannot collide with a
   // top-level ".data" path that happens to be present in the backup itself.
@@ -138,9 +362,9 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     
     {
       let encrypted_file = File::create(&encrypted_metadata_file).unwrap();
-      let metadata_bucket = store.metadata_bucket().await;
-      let prefix = &store.metadata_prefix;
-      metadata_bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
+      let bucket = metadata_store.init().await;
+      let prefix = &metadata_store.metadata_prefix;
+      bucket.download(format!("{prefix}{backup}.metadata").as_str(), encrypted_file).await.unwrap();
     }
     
     {
@@ -151,7 +375,7 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     }
   }
 
-  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+  let metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file.clone()).await;
 
   let size: u64 = metadata_reader.read_metadata("size").await.parse().unwrap();
   info!("Backup is {}", humanise_bytes(size));
@@ -161,16 +385,74 @@ pub async fn restore_backup(destination: PathBuf, backup: &String, store: &DataS
     panic!("Backup is {} but disk only has {} available space", humanise_bytes(size), humanise_bytes(available_space));
   }
 
+  let counter_pb = mp.add(ProgressBar::new_spinner());
+  counter_pb.set_style(
+    ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {pos} files restored")
+      .unwrap()
+      .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+  );
+  counter_pb.set_prefix("[Restore]");
+  counter_pb.enable_steady_tick(Duration::from_millis(80));
+
   let data_cache = &temporary_data_dir;
   trace!("Destination: {:?}", destination.as_path());
   let destination = &destination;
-  let data_bucket = &store.init().await;
-  metadata_reader.read().await
+  let data_bucket = &data_store.init().await;
+  let mp_ref = &mp;
+  let counter_inc = counter_pb.clone();
+  metadata_reader.read(false).await
     .map(|entry| async move {
-      process_file(&entry, destination.clone(), &data_bucket, &store.data_prefix, &data_cache, &key, hmac_secret).await
+      process_file(&entry, destination.clone(), &data_bucket, &data_store.data_prefix, &data_cache, &key, hmac_secret, mp_ref).await
     })
     .buffer_unordered(4)
-    .count()
+    .for_each(|_| { counter_inc.inc(1); futures::future::ready(()) })
     .await;
+
+  counter_pb.finish_with_message("done");
+
+  // Second pass: create empty directories and apply mtimes + permissions to all directories.
+  // Directory mtimes are updated whenever files or subdirectories are created
+  // inside them, so they must be set after all content has been restored.
+  // Metadata reader normally returns entries in ascending order, so directories are processed before 
+  // their contents, but by passing reversed=true we can ensure directories are processed after their 
+  // contents, so that setting a child directory's mtime does not cause its parent to be re-stamped.
+
+  let mut root_dir: Option<FileMetadata> = None;
+  {
+    let dir_metadata_reader = crate::metadata_file::MetadataReader::new(metadata_file).await;
+    let mut stream = dir_metadata_reader.read(true).await;
+    while let Some(entry) = stream.next().await {
+      if entry.ttype != FileType::DIRECTORY {
+        continue;
+      }
+      let rel = match safe_relative_path(entry.name.as_str()) {
+        Some(p) => p,
+        None => continue,
+      };
+      if rel.as_os_str().is_empty() {
+        // This is the root directory entry. Defer processing until the end, to avoid issues with
+        // the root's mtime being updated when the temporary directory is removed.
+        root_dir = Some(entry);
+        continue;
+      }
+      let path: PathBuf = destination.join(&rel);
+      trace!("Creating dir {:?}", &path);
+      create_dir_all(path.as_path()).unwrap();
+      let permissions = PermissionsExt::from_mode(entry.mode);
+      set_permissions(&path, permissions).unwrap();
+      let mtime = FileTime::from_unix_time(entry.mtime, 0);
+      set_file_mtime(&path, mtime).unwrap();
+    }
+  }
+
   remove_dir_all(&temporary_data_dir).unwrap();
+
+  // Finally, set the root directory's mtime and permissions. This must be done after the temporary directory is removed, 
+  // to avoid the root's mtime being updated by file deletion inside it.
+  if let Some(root) = root_dir {
+    let permissions = PermissionsExt::from_mode(root.mode);
+    set_permissions(destination.as_path(), permissions).unwrap();
+    let mtime = FileTime::from_unix_time(root.mtime, 0);
+    set_file_mtime(destination.as_path(), mtime).unwrap();
+  }
 }

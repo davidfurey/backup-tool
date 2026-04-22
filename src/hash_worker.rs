@@ -34,7 +34,7 @@ async fn generate_hash(dir_entry: &walkdir::DirEntry, cache: &AsyncCache, hmac_s
     res
 }
 
-pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress, force_hash: bool) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
+pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, source: &std::path::Path, cache: &AsyncCache, stores: &Vec<DataStore>, hmac_secret: &String, mp: &MultiProgress, force_hash: bool) -> (Option<UploadRequest>, Option<FileMetadata>, bool, u64) {
     let file_type: Option<FileType> = FileType::from(dir_entry.file_type());
     let mut destination: Option<String> = None;
     let mut data_hash: Option<String> = None;
@@ -43,36 +43,39 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCac
     let mut hash_cached = false;
     match file_type {
         Some(FileType::FILE) => {
-            let cached_d_hash = cache.try_get_hash(dir_entry.path(), &metadata).await.unwrap();
-            let d_hash = match cached_d_hash {
-                Some(h) => {
-                    hash_cached = true;
-                    if force_hash {
-                        let generated_hash = generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await;
-                        if generated_hash != h {
-                            warn!("Hash in cache does not match expected value for {:?}. Updated DB to match filesystem", dir_entry.file_name());
+            // For empty file: no content to hash or upload; data_hash stays None.
+            if metadata.len() != 0 {
+                let cached_d_hash = cache.try_get_hash(dir_entry.path(), &metadata).await.unwrap();
+                let d_hash = match cached_d_hash {
+                    Some(h) => {
+                        hash_cached = true;
+                        if force_hash {
+                            let generated_hash = generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await;
+                            if generated_hash != h {
+                                warn!("Hash in cache does not match expected value for {:?}. Updated DB to match filesystem", dir_entry.file_name());
+                            }
+                            generated_hash
+                        } else {
+                            h
                         }
-                        generated_hash
-                    } else {
-                        h
+                    },
+                    None => {
+                        generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await
                     }
-                },
-                None => {
-                    generate_hash(&dir_entry, cache, hmac_secret, mp, &metadata).await
+                };
+                
+                let requires_upload = cache.requires_upload(&d_hash, &stores).await.unwrap();
+                if !requires_upload.is_empty() {
+                    trace!("Sending {:?} to upload queue\n", dir_entry.file_name());
+                    upload_request = Some(UploadRequest {
+                        filename: dir_entry.path().to_path_buf(),  
+                        data_hash: d_hash.clone(),
+                    });
+                } else {
+                    trace!("Skipping {:?} ({:?} already uploaded)\n", dir_entry.file_name(), d_hash);
                 }
-            };
-            
-            let requires_upload = cache.requires_upload(&d_hash, &stores).await.unwrap();
-            if !requires_upload.is_empty() {
-                trace!("Sending {:?} to upload queue\n", dir_entry.file_name());
-                upload_request = Some(UploadRequest {
-                    filename: dir_entry.path().to_path_buf(),  
-                    data_hash: d_hash.clone(),
-                });
-            } else {
-                trace!("Skipping {:?} ({:?} already uploaded)\n", dir_entry.file_name(), d_hash);
+                data_hash = Some(d_hash);
             }
-            data_hash = Some(d_hash);
         }
         Some(FileType::SYMLINK) => {
             destination = Some(std::fs::read_link(dir_entry.path()).unwrap().to_string_lossy().to_string());
@@ -82,9 +85,13 @@ pub async fn hash_work(dir_entry: walkdir::DirEntry, id: usize, cache: &AsyncCac
     }
 
     let file_metadata = file_type.map(|ttype| {
+        let rel_name = dir_entry.path().strip_prefix(source)
+            .unwrap_or(dir_entry.path())
+            .to_string_lossy()
+            .to_string();
         metadata_file::FileMetadata {
             uid: id as i64,
-            name: dir_entry.path().to_string_lossy().to_string(),
+            name: rel_name,
             mtime: metadata.mtime(),
             mode: metadata.mode(),
             ttype: ttype,

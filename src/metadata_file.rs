@@ -29,7 +29,7 @@ use std::path::PathBuf;
 impl MetadataReader {
   pub async fn new<'b>(filename: PathBuf) -> MetadataReader {
     let options = sqlx::sqlite::SqliteConnectOptions::new()
-      .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+      .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
       .read_only(true)
       .filename(filename);
     let reader = MetadataReader {
@@ -51,9 +51,13 @@ impl MetadataReader {
     result.get(0)
   }
 
-  pub async fn read(&self) -> futures_core::stream::BoxStream<FileMetadata> {
+  pub async fn read(&self, reversed: bool) -> futures_core::stream::BoxStream<'_, FileMetadata> {
     use futures::StreamExt;
-    let query = sqlx::query("SELECT id, name, mtime, mode, ttype, destination, data_hash from files order by id asc;");
+    let query = if reversed {
+      sqlx::query("SELECT id, name, mtime, mode, ttype, destination, data_hash from files order by id desc;")
+    } else {
+      sqlx::query("SELECT id, name, mtime, mode, ttype, destination, data_hash from files order by id asc;")
+    };
     Box::pin(self.pool.fetch(query).map(|z| {
       let row = z.unwrap();
       FileMetadata {
@@ -72,7 +76,7 @@ impl MetadataReader {
 impl MetadataWriter {
   pub async fn new<'b>(filename: PathBuf) -> MetadataWriter {
     let options = sqlx::sqlite::SqliteConnectOptions::new()
-      .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+      .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
       .create_if_missing(true)
       .filename(filename);
     let metadata_file = MetadataWriter {

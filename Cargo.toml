@@ -43,3 +43,19 @@ fs2 = "0.4.3"
 
 [features]
 console = ["dep:console-subscriber"]
+
+[package.metadata.deb]
+name = "backup-tool"
+maintainer = "backup-tool maintainers"
+copyright = "2024 backup-tool maintainers"
+extended-description = """\
+A backup tool that encrypts files with PGP and stores them in OpenStack Swift.
+Content hashes (HMAC-SHA-512) are used for deduplication. Backups are indexed
+in a per-backup SQLite metadata file, also encrypted and uploaded."""
+depends = "libnettle8, libsqlite3-0, libssl3, libbz2-1.0, libgmp10"
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/backup-tool", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/backup-tool/README.md", "644"],
+]

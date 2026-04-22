@@ -19,7 +19,7 @@ pub fn encrypt_file(source: &mut File, dest: &mut File, key: &Cert, signing_cert
   Ok(())
 }
 
-fn encrypt(p: &dyn Policy, source: &mut (dyn Read), sink: &mut (dyn Write + Send + Sync),
+fn encrypt(p: &dyn Policy, source: &mut dyn Read, sink: &mut (dyn Write + Send + Sync),
           recipient: &openpgp::Cert, signing_cert: Option<openpgp::Cert>)
     -> openpgp::Result<()>
 {
