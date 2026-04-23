@@ -43,6 +43,7 @@ metadata_cache = "/var/cache/backup-tool"
 
 # HMAC-SHA-512 secret used as the content-hash key.
 # Changing this invalidates the local cache and backed-up data objects.
+# Generate one with: openssl rand -hex 32
 hmac_secret = "change-me-to-a-long-random-string"
 
 # PGP public key used to encrypt every uploaded object
