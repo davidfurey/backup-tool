@@ -82,6 +82,49 @@ Multiple `[[stores]]` sections are supported; backups are written to all of them
 
 Stores backed by a local directory use `local_path` instead of `container`. No OpenStack credentials are needed; objects are stored as plain files under the given directory using the same key structure (`<prefix><hash>` for data, `<prefix><name>.metadata` for metadata).
 
+### Creating keys
+
+Use separate keys for encryption and signing so you can enforce least privilege and reduce blast radius. This lets backup hosts encrypt and sign new backups without holding decryption material, while restore-capable systems can keep decryption keys isolated.
+
+1. Generate an encryption keypair (used to encrypt backup data and metadata):
+
+```bash
+sq key generate \
+	--userid "<test@example.com>" \
+	--cannot-authenticate \
+	--cannot-sign \
+	--expiration never \
+	--output encrypt.pgp \
+	--rev-cert encrypt.rev \
+	--shared-key \
+	--without-password
+```
+
+2. Extract the public certificate for backup-only hosts (encrypt but cannot decrypt):
+
+```bash
+sq key extract-cert --output encrypt.cert encrypt.pgp
+```
+
+3. Generate a signing keypair for metadata signatures:
+
+```bash
+sq key generate \
+	--userid "<test@example.com>" \
+	--cannot-authenticate \
+	--cannot-encrypt \
+	--expiration never \
+	--output sign.pgp \
+	--rev-cert sign.rev \
+	--shared-key \
+	--without-password
+```
+
+Recommended config mapping:
+
+- `encrypting_key_file`: use `encrypt.cert` on backup hosts (or `encrypt.pgp` where decryption is also needed).
+- `signing_key_file`: use `sign.pgp` on hosts that create backups.
+
 ### OpenStack authentication
 
 Authentication is delegated to [osauth](https://github.com/dtantsur/rust-osauth). This only applies to Swift-backed stores (those without `local_path`). Each store can embed a `cloud_config` block, or rely on the standard OpenStack environment variables (`OS_AUTH_URL`, `OS_APPLICATION_CREDENTIAL_ID`, etc.) or a `clouds.yaml` file.
